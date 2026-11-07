@@ -1,0 +1,1142 @@
+openapi: 3.1.0
+info:
+  title: Skillapt Registry API
+  version: 1.0.0
+  description: >
+    The official REST API for the skillapt package manager and registry for AI agent skills.
+    Skillapt is an independent package registry built for discovering, publishing, and
+    managing immutable skill packages for AI agents (Claude, Cursor, Codex, Antigravity, etc.).
+servers:
+  - url: https://registry.skillapt.dev/v1
+    description: Production Registry
+  - url: http://localhost:8787/v1
+    description: Local Development Server
+
+paths:
+  /skills:
+    get:
+      summary: Search and list skills
+      description: Search skills with optional filtering by query, category, runtime compatibility, and verified status.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Search term matching name, description, or keywords.
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          description: Filter by skill category.
+          schema:
+            $ref: '#/components/schemas/Category'
+        - name: compat
+          in: query
+          required: false
+          description: Filter by agent runtime compatibility (e.g. claude, cursor).
+          schema:
+            type: string
+        - name: verified
+          in: query
+          required: false
+          description: Filter for verified publisher packages only.
+          schema:
+            type: boolean
+        - name: sort
+          in: query
+          required: false
+          description: Sorting field.
+          schema:
+            type: string
+            enum: [downloads, recent, name]
+            default: downloads
+        - name: page
+          in: query
+          required: false
+          description: Page number for pagination.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          description: Number of items per page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Successful search results
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - skills
+                  - pagination
+                properties:
+                  skills:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SkillSummary'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+              examples:
+                default:
+                  value:
+                    skills:
+                      - name: pdf-summarizer
+                        latestVersion: 1.2.0
+                        description: Extracts text from PDF documents and generates structured agent summaries.
+                        license: MIT
+                        category: documents
+                        compatibility: ["claude", "cursor", "codex"]
+                        downloads: 1420
+                        verified: true
+                        owner:
+                          handle: alexdev
+                          avatarUrl: https://avatars.githubusercontent.com/u/12345
+                        updatedAt: "2026-11-01T12:00:00Z"
+                    pagination:
+                      page: 1
+                      limit: 20
+                      total: 1
+                      totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '429':
+          $ref: '#/components/responses/RateLimitedError'
+
+    post:
+      summary: Publish a skill package
+      description: >
+        Publish a new skill package or a new version of an existing skill.
+        The package must be a .tar.gz archive <= 5MB containing skill.json and SKILL.md.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The .tar.gz archive of the skill package (max 5 MB).
+      responses:
+        '201':
+          description: Package successfully published
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - version
+                  - sha256
+                  - size
+                  - tarballUrl
+                  - message
+                properties:
+                  name:
+                    type: string
+                    example: pdf-summarizer
+                  version:
+                    type: string
+                    example: 1.2.0
+                  sha256:
+                    type: string
+                    example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                  size:
+                    type: integer
+                    example: 14250
+                  tarballUrl:
+                    type: string
+                    format: uri
+                    example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                  message:
+                    type: string
+                    example: Successfully published pdf-summarizer@1.2.0
+        '400':
+          $ref: '#/components/responses/InvalidPackageError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLargeError'
+        '429':
+          $ref: '#/components/responses/RateLimitedError'
+
+  /skills/{name}:
+    get:
+      summary: Get skill details and versions
+      description: Returns package details, readme, owner information, and all available versions.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Name of the skill (can be scoped e.g. @acme/summarizer or urlencoded).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill metadata found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillDetail'
+              examples:
+                default:
+                  value:
+                    name: pdf-summarizer
+                    description: Extracts text from PDF documents and generates structured agent summaries.
+                    license: MIT
+                    repository: https://github.com/agent-skills/pdf-summarizer
+                    keywords: ["pdf", "summarizer", "documents"]
+                    category: documents
+                    compatibility: ["claude", "cursor", "codex"]
+                    owner:
+                      handle: alexdev
+                      avatarUrl: https://avatars.githubusercontent.com/u/12345
+                    latestVersion: 1.2.0
+                    downloads: 1420
+                    versions:
+                      1.2.0:
+                        version: 1.2.0
+                        sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                        size: 14250
+                        tarballUrl: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                        dependencies:
+                          text-cleaner: ^1.0.0
+                        publishedAt: "2026-11-01T12:00:00Z"
+                        yanked: false
+                        permissions:
+                          network: false
+                          shell: false
+                          filesystem: read
+                    readme: "# PDF Summarizer\n\nExtracts text and summarizes..."
+                    createdAt: "2026-10-15T09:30:00Z"
+                    updatedAt: "2026-11-01T12:00:00Z"
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /skills/{name}/{version}:
+    get:
+      summary: Get specific version metadata
+      description: Returns detailed metadata for an exact version of a skill.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Skill name.
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          description: Exact SemVer string.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Version metadata found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillVersionDetail'
+              examples:
+                default:
+                  value:
+                    name: pdf-summarizer
+                    version: 1.2.0
+                    sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                    size: 14250
+                    tarballUrl: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                    dependencies:
+                      text-cleaner: ^1.0.0
+                    publishedAt: "2026-11-01T12:00:00Z"
+                    yanked: false
+                    permissions:
+                      network: false
+                      shell: false
+                      filesystem: read
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /skills/{name}/-/{version}.tgz:
+    get:
+      summary: Download package tarball
+      description: Downloads the raw `.tar.gz` package tarball. Pinned versions can be downloaded even if yanked.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Skill name.
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          description: SemVer version string.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Binary package tarball
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: SHA-256 hash or ETag of the tarball
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=31536000, immutable
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="pdf-summarizer-1.2.0.tgz"
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /skills/{name}/{version}/yank:
+    post:
+      summary: Yank or unyank a skill version
+      description: >
+        Mark a version as yanked so that it is excluded from dependency resolution.
+        Only the skill owner or maintainers can yank a version.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Optional explanation for why this version is yanked.
+      responses:
+        '200':
+          description: Version yank status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - version
+                  - yanked
+                  - message
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  yanked:
+                    type: boolean
+                  message:
+                    type: string
+              examples:
+                default:
+                  value:
+                    name: pdf-summarizer
+                    version: 1.2.0
+                    yanked: true
+                    message: Version 1.2.0 has been yanked.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /me:
+    get:
+      summary: Get current authenticated user
+      description: Returns information about the user associated with the active session or bearer token.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: Current user details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              examples:
+                default:
+                  value:
+                    id: usr_9a8b7c6d
+                    handle: alexdev
+                    name: Alex Rivers
+                    email: alex@example.com
+                    avatarUrl: https://avatars.githubusercontent.com/u/12345
+                    createdAt: "2026-09-01T10:00:00Z"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /tokens:
+    get:
+      summary: List API tokens
+      description: List all API tokens belonging to the authenticated user.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: List of active API tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - tokens
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TokenSummary'
+              examples:
+                default:
+                  value:
+                    tokens:
+                      - id: tok_1234abcd
+                        name: cli-laptop
+                        prefix: apt_live_9f83
+                        createdAt: "2026-10-01T15:00:00Z"
+                        lastUsedAt: "2026-11-06T18:22:10Z"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+    post:
+      summary: Create an API token
+      description: >
+        Generate a new personal API token for CLI usage. The raw token is returned
+        EXACTLY ONCE in this response. The server only stores the SHA-256 hash.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  description: Descriptive name for the token (e.g. cli-workstation).
+                  example: cli-workstation
+      responses:
+        '201':
+          description: API token created
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - name
+                  - token
+                  - createdAt
+                  - warning
+                properties:
+                  id:
+                    type: string
+                    example: tok_5678efgh
+                  name:
+                    type: string
+                    example: cli-workstation
+                  token:
+                    type: string
+                    example: apt_live_a1b2c3d4e5f67890123456789abcdef0
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2026-11-07T10:00:00Z"
+                  warning:
+                    type: string
+                    example: Copy this token now. It will not be shown again.
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitedError'
+
+  /tokens/{id}:
+    delete:
+      summary: Revoke an API token
+      description: Delete and revoke an API token by ID.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the token to delete.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Token revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                properties:
+                  message:
+                    type: string
+                    example: Token successfully revoked.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /auth/github:
+    get:
+      summary: Initiate GitHub OAuth login
+      description: Redirects browser to GitHub OAuth authorization URL with anti-CSRF state token.
+      responses:
+        '302':
+          description: Redirect to GitHub login portal
+          headers:
+            Location:
+              schema:
+                type: string
+                example: https://github.com/login/oauth/authorize?client_id=...&state=...
+
+  /auth/github/callback:
+    get:
+      summary: GitHub OAuth callback
+      description: Handles redirect back from GitHub, exchanges code for access token, and issues httpOnly session cookie.
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: Authorization code from GitHub.
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          description: CSRF verification token.
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Authentication successful; redirects to web dashboard with Set-Cookie
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: skillapt_session=...; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000
+            Location:
+              schema:
+                type: string
+                example: /dashboard
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+
+  /auth/logout:
+    post:
+      summary: Logout of session
+      description: Terminates the web session and clears the session cookie.
+      security:
+        - CookieAuth: []
+      responses:
+        '200':
+          description: Logged out successfully
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: skillapt_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                properties:
+                  message:
+                    type: string
+                    example: Successfully logged out.
+
+  /reports:
+    post:
+      summary: Submit a skill report
+      description: Submit an abuse, malware, or vulnerability report against a skill package. Public endpoint rate-limited by IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - skillName
+                - version
+                - reason
+                - details
+              properties:
+                skillName:
+                  type: string
+                  example: pdf-summarizer
+                version:
+                  type: string
+                  example: 1.2.0
+                reason:
+                  type: string
+                  enum: [malware, spam, abusive, license_violation, other]
+                  example: malware
+                details:
+                  type: string
+                  example: Attempts to access local credentials without declaring network permissions.
+      responses:
+        '201':
+          description: Report recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - message
+                properties:
+                  id:
+                    type: string
+                    example: rep_99182
+                  message:
+                    type: string
+                    example: Report received and queued for review. Thank you for keeping the registry safe.
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '429':
+          $ref: '#/components/responses/RateLimitedError'
+
+  /stats:
+    get:
+      summary: Platform aggregates
+      description: Returns counts of skills, versions, downloads, and authors for the homepage.
+      responses:
+        '200':
+          description: Platform statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - totalSkills
+                  - totalVersions
+                  - totalDownloads
+                  - totalAuthors
+                properties:
+                  totalSkills:
+                    type: integer
+                    example: 1250
+                  totalVersions:
+                    type: integer
+                    example: 4820
+                  totalDownloads:
+                    type: integer
+                    example: 354920
+                  totalAuthors:
+                    type: integer
+                    example: 412
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Personal API token formatted as `apt_live_...`
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: skillapt_session
+      description: HttpOnly session cookie issued after GitHub OAuth login
+
+  schemas:
+    Category:
+      type: string
+      enum:
+        - documents
+        - coding
+        - research
+        - data
+        - devtools
+        - communication
+        - productivity
+        - other
+
+    Permissions:
+      type: object
+      required:
+        - network
+        - shell
+        - filesystem
+      properties:
+        network:
+          type: boolean
+          description: Whether the skill makes outbound network calls.
+        shell:
+          type: boolean
+          description: Whether the skill executes shell commands.
+        filesystem:
+          type: string
+          enum: [none, read, write, read-write]
+          description: Filesystem access scope.
+
+    User:
+      type: object
+      required:
+        - id
+        - handle
+        - name
+        - avatarUrl
+        - createdAt
+      properties:
+        id:
+          type: string
+          example: usr_9a8b7c6d
+        handle:
+          type: string
+          example: alexdev
+        name:
+          type: string
+          example: Alex Rivers
+        email:
+          type: string
+          format: email
+          example: alex@example.com
+        avatarUrl:
+          type: string
+          format: uri
+          example: https://avatars.githubusercontent.com/u/12345
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-09-01T10:00:00Z"
+
+    OwnerSummary:
+      type: object
+      required:
+        - handle
+        - avatarUrl
+      properties:
+        handle:
+          type: string
+          example: alexdev
+        avatarUrl:
+          type: string
+          format: uri
+          example: https://avatars.githubusercontent.com/u/12345
+
+    SkillSummary:
+      type: object
+      required:
+        - name
+        - latestVersion
+        - description
+        - license
+        - category
+        - compatibility
+        - downloads
+        - verified
+        - owner
+        - updatedAt
+      properties:
+        name:
+          type: string
+          example: pdf-summarizer
+        latestVersion:
+          type: string
+          example: 1.2.0
+        description:
+          type: string
+          example: Extracts text from PDF documents and generates structured agent summaries.
+        license:
+          type: string
+          example: MIT
+        category:
+          $ref: '#/components/schemas/Category'
+        compatibility:
+          type: array
+          items:
+            type: string
+          example: ["claude", "cursor", "codex"]
+        downloads:
+          type: integer
+          example: 1420
+        verified:
+          type: boolean
+          example: true
+        owner:
+          $ref: '#/components/schemas/OwnerSummary'
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-11-01T12:00:00Z"
+
+    SkillVersionSummary:
+      type: object
+      required:
+        - version
+        - sha256
+        - size
+        - tarballUrl
+        - dependencies
+        - publishedAt
+        - yanked
+        - permissions
+      properties:
+        version:
+          type: string
+          example: 1.2.0
+        sha256:
+          type: string
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        size:
+          type: integer
+          example: 14250
+        tarballUrl:
+          type: string
+          format: uri
+          example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            text-cleaner: ^1.0.0
+        publishedAt:
+          type: string
+          format: date-time
+          example: "2026-11-01T12:00:00Z"
+        yanked:
+          type: boolean
+          example: false
+        permissions:
+          $ref: '#/components/schemas/Permissions'
+
+    SkillDetail:
+      type: object
+      required:
+        - name
+        - description
+        - license
+        - category
+        - compatibility
+        - owner
+        - latestVersion
+        - downloads
+        - versions
+        - readme
+        - createdAt
+        - updatedAt
+      properties:
+        name:
+          type: string
+          example: pdf-summarizer
+        description:
+          type: string
+          example: Extracts text from PDF documents and generates structured agent summaries.
+        license:
+          type: string
+          example: MIT
+        repository:
+          type: string
+          format: uri
+          example: https://github.com/agent-skills/pdf-summarizer
+        keywords:
+          type: array
+          items:
+            type: string
+          example: ["pdf", "summarizer", "documents"]
+        category:
+          $ref: '#/components/schemas/Category'
+        compatibility:
+          type: array
+          items:
+            type: string
+          example: ["claude", "cursor", "codex"]
+        owner:
+          $ref: '#/components/schemas/OwnerSummary'
+        latestVersion:
+          type: string
+          example: 1.2.0
+        downloads:
+          type: integer
+          example: 1420
+        versions:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SkillVersionSummary'
+        readme:
+          type: string
+          example: "# PDF Summarizer\n\nExtracts text and summarizes..."
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-10-15T09:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-11-01T12:00:00Z"
+
+    SkillVersionDetail:
+      type: object
+      required:
+        - name
+        - version
+        - sha256
+        - size
+        - tarballUrl
+        - dependencies
+        - publishedAt
+        - yanked
+        - permissions
+      properties:
+        name:
+          type: string
+          example: pdf-summarizer
+        version:
+          type: string
+          example: 1.2.0
+        sha256:
+          type: string
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        size:
+          type: integer
+          example: 14250
+        tarballUrl:
+          type: string
+          format: uri
+          example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            text-cleaner: ^1.0.0
+        publishedAt:
+          type: string
+          format: date-time
+          example: "2026-11-01T12:00:00Z"
+        yanked:
+          type: boolean
+          example: false
+        permissions:
+          $ref: '#/components/schemas/Permissions'
+
+    TokenSummary:
+      type: object
+      required:
+        - id
+        - name
+        - prefix
+        - createdAt
+      properties:
+        id:
+          type: string
+          example: tok_1234abcd
+        name:
+          type: string
+          example: cli-laptop
+        prefix:
+          type: string
+          example: apt_live_9f83
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-10-01T15:00:00Z"
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-11-06T18:22:10Z"
+
+    Pagination:
+      type: object
+      required:
+        - page
+        - limit
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 1
+        totalPages:
+          type: integer
+          example: 1
+
+    ErrorEnvelope:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              example: BAD_REQUEST
+            message:
+              type: string
+              example: Invalid request parameters.
+
+  responses:
+    BadRequestError:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: BAD_REQUEST
+                  message: Invalid query parameters or malformed JSON.
+
+    UnauthorizedError:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: UNAUTHORIZED
+                  message: Authentication required. Provide a valid Bearer token or session.
+
+    ForbiddenError:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: FORBIDDEN
+                  message: You are not authorized to publish or modify this package.
+
+    NotFoundError:
+      description: Resource Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: NOT_FOUND
+                  message: The requested skill or version does not exist.
+
+    ConflictError:
+      description: Version or Name Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: CONFLICT
+                  message: Version 1.2.0 has already been published and is immutable.
+
+    InvalidPackageError:
+      description: Invalid Package Format or Manifest
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: INVALID_PACKAGE
+                  message: Manifest skill.json failed validation or SKILL.md is missing.
+
+    PayloadTooLargeError:
+      description: Payload Exceeds Maximum Size Limit (5MB)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: PAYLOAD_TOO_LARGE
+                  message: Package tarball exceeds the 5MB size limit.
+
+    RateLimitedError:
+      description: Rate Limit Exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Number of seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: RATE_LIMITED
+                  message: Rate limit exceeded. Please try again later.
