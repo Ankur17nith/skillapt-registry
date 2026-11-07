@@ -1,49 +1,99 @@
 # Skillapt Registry Specification
 
-> **Version**: 1.0.0  
-> **Status**: Ready for Implementation  
-> **Target Platform**: Cloudflare Workers (TypeScript, Hono, D1, R2)  
+> **Version**: 1.1.0  
+> **Status**: Approved Specification for Registry, CLI, and Web UI  
+> **Target Platform**: Cloudflare Workers (TypeScript, Hono, D1 SQLite, R2 Object Storage)  
 > **Branding Rule**: The product name lives in exactly one constant: `PRODUCT_NAME = "skillapt"` in `src/config.ts`.
 
 ---
 
 ## 1. Overview & Vision
 
-`skillapt` is a dedicated, secure package manager and package registry built specifically for **AI agent skills**. 
+`skillapt` is an independent, secure package manager and package registry built specifically for **AI agent skills**.
 
-An **agent skill** is a modular package that teaches an AI agent (such as Claude, Cursor, Codex, Antigravity, or custom LLM systems) how to perform specialized tasks. Skills provide prompts, templates, schemas, and helper scripts that agents consume to accomplish workflows like summarizing documents, querying databases, generating code, or auditing security.
+An **agent skill** is a modular package that teaches an AI agent (such as Claude, Cursor, Codex, Antigravity, or custom LLM frameworks) how to perform specialized tasks. Skills provide instructions, prompt templates, schemas, and helper scripts that agents consume to accomplish workflows like document summarization, database queries, code refactoring, or security auditing.
 
-`skillapt` is **completely independent of npm**. It does not use npm packages, npm registries, `node_modules`, or npm scripts. It provides a lightweight, sandboxed distribution format tailored for agentic AI architectures.
+`skillapt` is **completely independent of npm**. It does not use npm packages, npm registries, `node_modules`, or npm lifecycle scripts. It provides a lightweight, sandboxed distribution format tailored for modern agentic AI architectures.
 
 ### Core Architecture Principles
-1. **Zero Code Execution on Registry**: The registry never executes, builds, runs, or evals any user code. Packages are inspected statically and served as static tarballs.
-2. **Immutable Releases**: Once published, a version's tarball and metadata are frozen forever. A published version can never be overwritten or silently altered.
-3. **Explicit Permissions**: Every skill explicitly declares what resources it needs (network, shell, filesystem). Agents and users know the permission footprint before installation.
-4. **Resilient Dependency Resolution**: Semantic Versioning (SemVer 2.0.0) resolution skipping yanked versions, backed by deterministic lockfiles with SHA-256 integrity checks.
-5. **Edge-Native Performance**: Powered by Cloudflare Workers (compute at the edge), Cloudflare D1 (SQLite database for relations and searches), and Cloudflare R2 (S3-compatible object storage for tarballs).
+1. **Zero Code Execution on Registry**: The registry never executes, builds, runs, or evaluates user code. Packages are inspected statically and served as static tarballs.
+2. **Immutable Releases & Atomicity**: Once published, a version's tarball and metadata are frozen forever. Releases are atomic: tarball storage and database records are synchronized with complete rollback on failure. Build metadata (`+...`) is strictly rejected.
+3. **Explicit Declarations**: Every skill declares its permissions (network, shell, filesystem). These are declarations for user and agent awareness, not kernel-level enforcements.
+4. **Deterministic Resolution**: Semantic Versioning (SemVer 2.0.0) resolution skipping yanked and removed versions, backed by deterministic lockfiles (`skills.lock.json`) with standard `integrity` (`sha256-<hex>`) hashes. Flat installs prevent dependency hell.
+5. **Edge-Native Performance**: Powered by Cloudflare Workers (compute at the edge), Cloudflare D1 (relational metadata), Cloudflare R2 (immutable tarball storage), and Cloudflare native Rate Limiting.
 
 ---
 
-## 2. Package Format & Archive Rules
+## 2. Threat Model & Security Posture
 
-Every skill package is packaged as a standard gzip-compressed tar archive (`.tar.gz` or `.tgz`).
+AI agent skill packages introduce threat vectors distinct from traditional software dependencies. Because skills are interpreted by Large Language Models and agent runtimes, security requires clear boundaries and defense-in-depth.
 
-### 2.1 Archive Structure
+### 2.1 Threat Vectors
 
-Inside the archive root directory, the package MUST contain:
+| Threat | Description | Registry Mitigation | Runtime / Client Mitigation |
+| :--- | :--- | :--- | :--- |
+| **Prompt Injection** | Adversarial instructions hidden inside `SKILL.md` or templates designed to hijack agent system prompts, leak system contexts, or bypass agent guardrails. | Static text inspection, UTF-8 normalization, required standard YAML frontmatter, community abuse reporting (`POST /v1/reports`). | Agents must treat unverified skill documentation as untrusted user input, isolate system instructions, and enforce prompt delimiters. |
+| **Malicious Scripts** | Executable shell, Python, or JavaScript scripts designed to steal environment keys (`.env`, AWS/OpenAI tokens) or execute system commands. | Strict ban on binary executables (`.exe`, ELF, Mach-O, `.dll`, `.so`). Explicit permission declaration required in `skill.json`. Static extension and file structure validation. | Agent environments must run helper scripts inside ephemeral sandboxes (e.g. gVisor, Docker, WebAssembly) with restricted permissions. |
+| **Permission Under-declaration** | A skill declares `network: false` but its script attempts socket connections. | Declarations are verified against community reports; false declarations result in immediate admin takedown (`removed` status). | Runtimes must enforce declared permissions via OS sandbox profiles rather than relying on trust. |
+| **Typosquatting & Impersonation** | Registering names resembling popular skills (e.g., `pdf-summarizer` vs `pdf-summarizerr`) or impersonating official vendor packages. | Reserved names list (`skillapt`, `admin`, `claude`, `openai`, etc.), strict GitHub-scoped ownership (`@handle/name`), verified badges for authenticated repositories, and typosquat reporting. | CLI warns on newly published packages and flags unverified publishers. |
+| **Decompression Bombs (Zip Bombs)** | Small `.tar.gz` archives expanding into hundreds of gigabytes to exhaust memory or disk space. | Strict upload limit (5 MB compressed) and **streaming decompression aborting at 25 MB** before memory allocation. Maximum 500 files. | CLI applies identical streaming decompression limits locally before unpacking. |
+| **Path Traversal & Overwrite** | Tar archives containing `../`, absolute paths, symlinks, or duplicate filenames attempting to overwrite critical host files. | Tarball parser strictly forbids `..`, absolute paths, Windows drive letters, symlinks, hardlinks, and duplicate paths. | CLI validates all paths prior to writing to the project skills directory. |
+
+### 2.2 Permissions Are Declarations, Not Enforcement
+> [!IMPORTANT]
+> The `permissions` object in `skill.json` represents the author's **declared capability requirements**. The registry verifies that the declaration is well-formed, but the registry **does not and cannot enforce runtime constraints** during agent execution. Client CLI tools, IDE plugins, and agent hosts are responsible for reading `permissions` and configuring sandboxed environments (e.g. disabling container networking if `network: false`).
+
+---
+
+## 3. Package Format & Archive Rules
+
+Every skill package is distributed as a gzip-compressed tar archive (`.tar.gz` or `.tgz`).
+
+### 3.1 Archive Layout
 
 ```text
-my-skill/
-├── skill.json       # Required: Package manifest
-├── SKILL.md         # Required: Agent documentation and prompt guide
-└── ...              # Optional: Helper templates, prompts, scripts, data
+<package-name>/               # Optional root directory (normalized automatically)
+├── skill.json                # Required: Package manifest
+├── SKILL.md                  # Required: Agent documentation with standard YAML frontmatter
+└── ...                       # Optional: Prompts, templates, schemas, and helper scripts
 ```
 
-> **Note on root prefix**: Like standard tar archives, files MAY be placed in a top-level root folder matching the package name (e.g. `my-skill/skill.json`) or at the archive root (`skill.json`). The registry unpacker normalizes both structures safely.
+### 3.2 Required Files & Specifications
 
-### 2.2 Allowed File Types
+#### 1. `SKILL.md` (Agent Skills Open Standard)
+`SKILL.md` is the primary interface between the package and the consuming AI agent. It **MUST** begin with valid YAML frontmatter demarcated by triple dashes (`---`).
 
-To protect agent environments and prevent malicious payloads, only safe text, prompt, template, data, and script formats are permitted:
+- **Required Frontmatter Keys**:
+  - `name`: Must match the **unscoped** package name specified in `skill.json` (e.g. for package `@alice/pdf-tool`, frontmatter `name` must be `pdf-tool`).
+  - `description`: A clear, single-sentence summary of what the skill enables for the agent.
+- **Content Limits**:
+  - Minimum size: 10 non-whitespace characters.
+  - Maximum size: 256 KB (262,144 bytes). Prevents context-window flooding and D1 database bloat.
+- **Example `SKILL.md`**:
+```markdown
+---
+name: pdf-summarizer
+description: Extracts text from PDF files and generates structured summaries.
+category: documents
+version: 1.2.0
+---
+
+# PDF Summarizer Skill
+
+## Capabilities
+- Extracts raw text and metadata from PDF files up to 50 MB.
+- Generates section-by-section summaries formatted in GitHub Markdown.
+
+## Usage Guidelines
+When the user asks to summarize a PDF, inspect the document outline first...
+```
+
+#### 2. `skill.json` (Package Manifest)
+The authoring manifest defining metadata, dependencies, and capabilities. Detailed schema is defined in [Section 4](#4-package-manifest-skilljson).
+
+### 3.3 Allowed File Types & Content Verification
+
+The registry inspects all entries in the tarball. Only safe, text-based, template, and script formats are allowed:
 
 | Category | Allowed File Extensions |
 | :--- | :--- |
@@ -51,37 +101,33 @@ To protect agent environments and prevent malicious payloads, only safe text, pr
 | **Data & Configuration** | `.json`, `.yaml`, `.yml`, `.toml`, `.csv`, `.tsv` |
 | **Templates** | `.jinja`, `.jinja2`, `.mustache`, `.hbs`, `.template` |
 | **Common Scripts** | `.js`, `.mjs`, `.cjs`, `.ts`, `.py`, `.sh`, `.bash`, `.zsh`, `.lua`, `.rb` |
-| **Allowed Dotfiles** | `.gitignore`, `.editorconfig` |
+| **Allowed Special Dotfiles** | `.gitignore`, `.editorconfig` |
 
-**Strictly Prohibited**:
-- Executable binaries and shared libraries (`.exe`, `.dll`, `.so`, `.dylib`, `.bin`, `.app`, `.dmg`, etc.)
-- Archive recursion (`.tar`, `.gz`, `.zip`, `.rar`, `.7z` inside the tarball)
-- Hidden files or directories other than `.gitignore` and `.editorconfig` (e.g., no `.git/`, `.env`, `.DS_Store`)
+**Strictly Prohibited & Rejected**:
+- **Binary Executables & Libraries**: `.exe`, `.dll`, `.so`, `.dylib`, `.bin`, `.elf`, `.macho`, `.com`.
+- **Content Signature Checking**: The registry inspects the initial 512 bytes of every file. Any file matching ELF (`0x7F 0x45 0x4C 0x46`), Mach-O (`0xFE 0xED 0xFA 0xCE/CF` or `0xCF 0xFA 0xED 0xFE`), Windows PE (`MZ` / `0x4D 0x5A`), or Java class magic bytes is **rejected immediately**, even if disguised with a `.py` or `.txt` extension.
+- **Nested Archives**: `.tar`, `.gz`, `.zip`, `.rar`, `.7z`, `.bz2`.
+- **Hidden Files**: Any file or directory starting with `.` other than `.gitignore` and `.editorconfig`.
 
-### 2.3 Archive Size & Safety Limits
+### 3.4 Archive Safety Constraints & Streaming Limits
 
-| Constraint | Limit | Description |
+| Constraint | Limit | Implementation Requirement |
 | :--- | :--- | :--- |
-| **Compressed Upload Size** | **5 MB** (5,242,880 bytes) | Maximum allowable multipart payload for `.tar.gz`. |
-| **Uncompressed Size** | **25 MB** (26,214,400 bytes) | Prevents decompression bombs (zip bombs). |
-| **Max File Count** | **500 files** | Prevents inode exhaustion. |
-| **Max File Path Length** | **255 characters** | Prevents buffer overflows and path truncation issues. |
-
-### 2.4 Path Security & Traversal Prevention
-
-During tar inspection, every file entry MUST satisfy:
-- **No Path Traversal**: Cannot contain `..` path segments.
-- **No Absolute Paths**: Cannot start with `/`, `\`, or Windows drive letters (e.g. `C:`).
-- **No Symlinks or Hardlinks**: Tar entry header type flag MUST be regular file (`0` or `\0`) or directory (`5`). Links, block devices, character devices, and FIFOs are immediately rejected.
-- **Clean Unicode**: Path names must be valid UTF-8 without null bytes (`\0`) or control characters.
+| **Compressed Upload Limit** | **5 MB** (5,242,880 bytes) | Enforced via HTTP `Content-Length` and multipart body stream. |
+| **Uncompressed Total Limit** | **25 MB** (26,214,400 bytes) | **Enforced strictly WHILE streaming** through `DecompressionStream("gzip")`. The reader aborts immediately when cumulative chunk bytes exceed 25 MB. Never buffered into memory. |
+| **Max File Count** | **500 entries** | Aborts parsing if file count exceeds 500. |
+| **Max Path Length** | **255 characters** | Rejects entries with path length > 255. |
+| **Path Traversal (`..`)** | Forbidden | Any entry containing `..` as a path segment is rejected. |
+| **Absolute Paths** | Forbidden | Any path starting with `/`, `\`, or Windows drive letters (e.g. `C:`) is rejected. |
+| **Duplicate Paths** | Forbidden | The unpacker maintains a set of seen paths. Duplicate paths (including case-insensitive and Unicode NFC collisions) trigger immediate rejection. |
+| **Unicode Normalization** | NFC Required | Paths are normalized via UTF-8 NFC. Collisions between decomposed and precomposed representations are blocked. |
+| **Header Types** | Regular/Dir Only | Type flags other than `'0'` (regular file), `'\0'`, and `'5'` (directory) are rejected (symlinks `'2'`, hardlinks `'1'`, devices `'3'`/`'4'`/`'6'` are blocked). PAX (`'x'`, `'g'`) and GNU (`'L'`, `'K'`) headers are safely handled as metadata or rejected if malformed. |
 
 ---
 
-## 3. Package Manifest (`skill.json`)
+## 4. Package Manifest (`skill.json`)
 
-The manifest `skill.json` defines package metadata, agent runtime compatibility, permissions, and dependencies.
-
-### 3.1 JSON Schema Definition
+The package manifest lives inside the archive root and governs package distribution.
 
 ```json
 {
@@ -104,62 +150,83 @@ The manifest `skill.json` defines package metadata, agent runtime compatibility,
 }
 ```
 
-### 3.2 Field Specifications
+### 4.1 Field Rules & Validation Matrix
 
-| Field | Type | Required | Rules & Validation |
+| Field | Type | Required | Specification & Validation Rules |
 | :--- | :--- | :--- | :--- |
-| `name` | `string` | **Yes** | 3 to 50 characters. Lowercase letters (`a-z`), digits (`0-9`), and hyphens (`-`). Cannot start or end with a hyphen. May optionally have a scope prefix: `@<scope>/<name>`, where scope is 2 to 30 lowercase alphanumeric characters/hyphens. Regex: `^(@[a-z0-9-]{2,30}\/)?[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$` |
-| `version` | `string` | **Yes** | Valid Semantic Versioning 2.0.0 (e.g., `1.0.0`, `1.2.3-alpha.1`). Must satisfy standard strict semver regex. |
-| `description` | `string` | **Yes** | 10 to 300 characters. Plain text describing the skill. |
-| `license` | `string` | **Yes** | Valid SPDX license identifier (e.g. `MIT`, `Apache-2.0`, `ISC`, `BSD-3-Clause`) or `UNLICENSED`. 1 to 50 characters. |
-| `repository` | `string` | No | Valid HTTP/HTTPS repository URL (e.g., `https://github.com/user/repo`). Max 255 characters. |
-| `keywords` | `string[]` | No | Up to 10 strings. Each keyword must be 2 to 30 lowercase alphanumeric characters and hyphens. |
+| `name` | `string` | **Yes** | 3 to 50 characters. Lowercase letters (`a-z`), digits (`0-9`), and hyphens (`-`). Cannot start or end with a hyphen. May optionally have a scope prefix: `@<handle>/<name>`. Regex: `^(@[a-z0-9-]{2,30}\/)?[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$`. Must not be in the [Reserved Names](#53-reserved-names-list) list. |
+| `version` | `string` | **Yes** | Strict Semantic Versioning 2.0.0 (e.g. `1.0.0`, `2.1.0-beta.1`). **Build metadata (`+...`) is strictly rejected** to ensure release immutability and unambiguous version precedence. |
+| `description` | `string` | **Yes** | 10 to 300 characters. Plain text summary. |
+| `license` | `string` | **Yes** | Valid SPDX license identifier (e.g. `MIT`, `Apache-2.0`, `ISC`) or `UNLICENSED`. Max 50 characters. |
+| `repository` | `string` | No | Valid HTTP/HTTPS repository URL (e.g. `https://github.com/org/repo`). Required for verified badge. |
+| `keywords` | `string[]` | No | Up to 10 strings. Lowercase alphanumeric and hyphens, 2–30 chars each. |
 | `category` | `string` | **Yes** | One of: `documents`, `coding`, `research`, `data`, `devtools`, `communication`, `productivity`, `other`. |
-| `compatibility`| `string[]` | **Yes** | At least one item. Recognized platforms: `claude`, `cursor`, `codex`, `antigravity`, `openai`, `custom`. Max 20 items. |
-| `dependencies` | `object` | No | Key-value mapping where key is a skill package name and value is a valid SemVer range (e.g. `^1.0.0`, `~2.1.0`, `>=1.0.0 <2.0.0`, `1.2.3`). Maximum 50 dependencies. |
-| `permissions` | `object` | **Yes** | Object declaring capability requirements: <br>• `network`: `boolean`<br>• `shell`: `boolean`<br>• `filesystem`: `"none"` \| `"read"` \| `"write"` \| `"read-write"` |
+| `compatibility` | `string[]` | **Yes** | 1 to 20 strings. Valid targets: `claude`, `cursor`, `codex`, `antigravity`, `openai`, `custom`. |
+| `dependencies` | `object` | No | Key-value mapping of dependency skill name to valid SemVer range (e.g. `^1.0.0`, `~2.1.0`, `>=1.0.0 <2.0.0`). Max 50 dependencies. Every dependency must satisfy the [Dependency Rules](#7-dependency-resolution--install-model). |
+| `permissions` | `object` | **Yes** | Capability declarations: <br>• `network`: `boolean`<br>• `shell`: `boolean`<br>• `filesystem`: `"none"` \| `"read"` \| `"write"` \| `"read-write"` |
 
 ---
 
-## 4. Name Ownership & Immutability Rules
+## 5. Naming, Scopes, & Ownership
 
-### 4.1 First Publisher Ownership
-- The first user to publish a package name becomes the **owner** of that package.
-- If a package is scoped (e.g., `@acme/summarizer`), the scope `@acme` belongs to the user or organization that first claimed it.
-- Subsequent versions of the package can ONLY be published by the package owner or authorized maintainers.
+### 5.1 Scopes (`@handle/name`)
+In `skillapt` v1, scopes are strictly bound to GitHub usernames and organization handles:
+- A scoped package MUST follow the pattern `@<handle>/<name>`.
+- The scope `@<handle>` matches the authenticated user's GitHub login handle (case-insensitive).
+- **Enforcement**: Only user `@alice` can publish `@alice/my-skill`. An attempt by user `@bob` to publish under `@alice/*` returns `403 FORBIDDEN`.
+- Organization scopes: Allowed if the user is a verified public member or owner of that GitHub organization.
 
-### 4.2 Version Immutability
-- Once published, version `X.Y.Z` of a package is **strictly immutable**.
-- The tarball content, SHA-256 hash, and manifest metadata cannot be edited, swapped, or overwritten.
-- Attempting to re-publish an existing version results in a `409 CONFLICT` error.
-- To make updates, authors must increment the version according to SemVer (e.g., `1.0.1` or `1.1.0`).
+### 5.2 Unscoped Packages (First-Come, First-Served)
+- Unscoped packages (e.g. `pdf-summarizer`) are owned by whichever authenticated user successfully publishes version 1 first.
+- Subsequent releases of that unscoped package can only be published by that owner or designated maintainers.
 
-### 4.3 Yank Behavior
-- The package owner can **yank** a version (`POST /v1/skills/:name/:version/yank`).
-- **What Yanking Does**:
-  - Sets `yanked: true` in the database.
-  - The version is **excluded** from automatic SemVer range queries (e.g. `skillapt install pdf-summarizer` or resolution for `^1.0.0` will ignore yanked `1.0.1` and pick `1.0.0`).
-  - Search indexes deprioritize or flag yanked versions.
-- **What Yanking Does NOT Do**:
-  - It does NOT delete the tarball from R2.
-  - It does NOT break existing builds or existing lockfiles. Anyone requesting the exact version directly (e.g. `GET /v1/skills/:name/-/:version.tgz` or explicit pinned version `1.0.1`) can still download it.
-- **Un-yanking**: Owners may un-yank a version if a mistake was made, returning it to standard resolution.
+### 5.3 Reserved Names List
+The following names are strictly reserved by the registry and **cannot be registered** as unscoped packages:
+
+```text
+skillapt, admin, api, www, official, registry, support, security, root,
+claude, openai, anthropic, cursor, codex, antigravity, gemini, chatgpt,
+null, undefined, core, internal, system, auth, account, dashboard
+```
+
+Any attempt to publish a package using a reserved name returns `400 BAD_REQUEST` with code `RESERVED_NAME`.
+
+### 5.4 Typosquatting & Impersonation Policy
+Users may submit abuse reports via `POST /v1/reports` using the reason code `typosquat`. If an unscoped package closely resembles an existing high-reputation skill (evaluated via Levenshtein distance $\le 2$ or phonetics) without legitimate distinction, registry administrators will review and take down the offending package under the Admin Takedown procedure.
+
+### 5.5 Verified Publisher Status (`verified: true`)
+A package displays `verified: true` in metadata and search results if and only if:
+1. The publisher account is authenticated via GitHub OAuth.
+2. The `repository` field in `skill.json` points to a valid GitHub repository owned by the publisher's GitHub account or an organization where the publisher is a public member.
+3. For scoped packages `@handle/name`, the handle directly matches the verified GitHub account.
 
 ---
 
-## 5. Tarball Integrity & Lockfile Specification
+## 6. Consumer Project Files (`skills.json` and `skills.lock.json`)
 
-### 5.1 Tarball Checksum (Integrity)
-- Upon publication, the registry calculates the **SHA-256** cryptographic digest of the received tarball bytes:
-  $$\text{sha256} = \text{hex}(\text{SHA-256}(\text{tarball\_bytes}))$$
-- The hash is stored in the D1 database alongside package metadata.
-- When an agent or CLI downloads a package, it MUST verify that:
-  $$\text{SHA-256}(\text{downloaded\_bytes}) == \text{expected\_sha256}$$
-  If the hash does not match, the installation fails immediately with an integrity mismatch error.
+Consumer repositories (projects that consume skills for their AI agents) use standard JSON configuration files in the root directory.
 
-### 5.2 Lockfile Format (`skillapt-lock.json`)
+### 6.1 Consumer Manifest (`skills.json`)
+The consumer manifest declares the project's direct skill dependencies:
 
-The CLI maintains a deterministic lockfile in the consumer repository root:
+```json
+{
+  "name": "my-agent-workspace",
+  "version": "1.0.0",
+  "description": "Customer support AI agent configuration",
+  "skills": {
+    "pdf-summarizer": "^1.2.0",
+    "@acme/ticket-classifier": "~2.0.0",
+    "text-cleaner": "1.0.2"
+  }
+}
+```
+
+- `name`: Name of the consumer workspace (string).
+- `skills`: Object mapping skill package name to required SemVer range.
+
+### 6.2 Consumer Lockfile (`skills.lock.json`)
+The lockfile guarantees deterministic, reproducible installations across developer workstations and CI/CD pipelines.
 
 ```json
 {
@@ -168,7 +235,8 @@ The CLI maintains a deterministic lockfile in the consumer repository root:
     "pdf-summarizer": {
       "version": "1.2.0",
       "resolved": "https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz",
-      "integrity": "sha256-a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0",
+      "integrity": "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "category": "documents",
       "permissions": {
         "network": false,
@@ -182,7 +250,8 @@ The CLI maintains a deterministic lockfile in the consumer repository root:
     "text-cleaner": {
       "version": "1.0.2",
       "resolved": "https://registry.skillapt.dev/v1/skills/text-cleaner/-/1.0.2.tgz",
-      "integrity": "sha256-def0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc",
+      "integrity": "sha256-7d8312d8a427f71b9e0787389278918237abc091823481298471209348123049",
+      "sha256": "7d8312d8a427f71b9e0787389278918237abc091823481298471209348123049",
       "category": "data",
       "permissions": {
         "network": false,
@@ -195,482 +264,207 @@ The CLI maintains a deterministic lockfile in the consumer repository root:
 }
 ```
 
+### 6.3 Integrity Field Standard
+- **Format**: `sha256-<hex-digest>` (e.g. `sha256-e3b0c442...`).
+- Both `integrity` (`sha256-<hex>`) and `sha256` (`<hex>`) are returned by the registry API across all version endpoints and stored in `skills.lock.json`.
+- The CLI MUST verify `SHA-256(tarball_bytes) === integrity` before unpacking. If the checksum does not match, the installation aborts with an integrity error.
+
 ---
 
-## 6. Authentication & Authorization Model
+## 7. Dependency Resolution & Install Model
 
-The registry supports two authentication mechanisms:
-1. **Browser Sessions**: For the web UI via secure, HTTP-only cookies.
-2. **API Bearer Tokens**: For the CLI tool via personal access tokens.
+`skillapt` employs a **flat dependency model** designed for agent prompt simplicity:
 
-### 6.1 GitHub OAuth 2.0 Web Flow
+### 7.1 Rules & Constraints
+1. **Publication-Time Validation**: Every dependency declared in `skill.json` MUST already exist in the registry at publish time and have at least one matching, non-removed (`active` or `yanked`) version satisfying the SemVer range. If a dependency cannot be satisfied, publish is rejected with `400 INVALID_DEPENDENCY`.
+2. **Maximum Dependency Depth**: 10 levels. Transitive trees deeper than 10 levels fail resolution.
+3. **No Cycles**: Dependency graphs must be Directed Acyclic Graphs (DAG). Any circular reference ($A \to B \to A$) causes an installation failure.
+4. **Flat Installation (One Version Per Name)**: Because AI agents access skills by name in context windows, there are no nested `node_modules`. If two dependencies require conflicting versions of the same skill (e.g. `foo@1.0.0` vs `foo@2.0.0`), the CLI raises a **Version Conflict Error** requiring the user to resolve the conflict.
 
-```
-User (Browser)               Skillapt Registry               GitHub OAuth
-     |                               |                            |
-     |--- 1. GET /v1/auth/github --->|                            |
-     |                               |-- 2. Redirect to GitHub -->|
-     |<-- 3. 302 to GitHub Auth -----|                            |
-     |                                                            |
-     |--- 4. Authorize App on GitHub ---------------------------->|
-     |<-- 5. Redirect to /v1/auth/github/callback?code=... -------|
-     |                               |                            |
-     |--- 6. Callback with code ---->|-- 7. Exchange code ------->|
-     |                               |<-- 8. Access token --------|
-     |                               |-- 9. Fetch user profile -->|
-     |                               |<-- 10. User data ----------|
-     |                               |                            |
-     |                               | [Create/Update User in D1] |
-     |                               | [Create Web Session]       |
-     |<-- 11. Set-Cookie: session ---|                            |
-     |        Redirect to Web UI     |                            |
+---
+
+## 8. Version Lifecycle & Admin Takedown
+
+Every skill version has a lifecycle state tracked in the `skill_versions.status` column:
+
+```mermaid
+stateDiagram-v2
+    [*] --> active : Publish (atomic R2 + D1)
+    active --> yanked : Owner Yanks Version
+    yanked --> active : Owner Un-yanks Version
+    active --> removed : Admin Takedown (Report / Malware)
+    yanked --> removed : Admin Takedown
 ```
 
-- **State Parameter**: Signed or random crypto-state stored in temporary cookie to prevent CSRF attacks.
-- **Session Cookie Attributes**:
+### 8.1 Status Definitions
+
+| Status | Range Resolution | Direct Pinned Download | Metadata Visibility | HTTP Download Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `active` | Included | Available | Full details | `200 OK` |
+| `yanked` | **Excluded** | Available | Visible with `yanked: true` | `200 OK` |
+| `removed` | **Excluded** | **Blocked** | Visible as `{ status: "removed", removed: true }` | **`410 Gone`** |
+
+### 8.2 Yanking (`POST /v1/skills/:name/:version/yank`)
+- Performed by the package owner.
+- Yanks hide the version from automatic range resolution, but pinned downloads continue to function for existing lockfiles.
+
+### 8.3 Admin Takedowns (`status = "removed"`)
+When a package is found to contain malware, prompt injection, or severe copyright violations:
+1. The version status is updated to `removed` and linked to the originating `report_id`.
+2. Tarball downloads (`GET /v1/skills/:name/-/:version.tgz`) return **`410 Gone`** with explanation.
+3. Metadata reflects `status: "removed"`, `removed: true`, and omits the `tarballUrl`.
+4. **Admin Route**: `POST /v1/admin/skills/:name/:version/takedown` (requires `X-Admin-Token` or `ADMIN_SECRET`).
+5. **Direct D1 Procedure** (Emergency / Manual):
+   ```sql
+   UPDATE skill_versions 
+   SET status = 'removed', yank_reason = 'Admin Takedown: Malware report rep_12345'
+   WHERE skill_name = 'malicious-skill' AND version = '1.0.0';
+   ```
+
+---
+
+## 9. Publish Atomicity & Storage Integrity
+
+To prevent orphaned files in R2 and inconsistent database states, the publication pipeline enforces atomic operations:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor CLI as CLI / Publisher
+    participant API as Registry API
+    participant D1 as Cloudflare D1
+    participant R2 as Cloudflare R2
+
+    CLI->>API: POST /v1/skills (multipart .tar.gz)
+    API->>API: 1. Validate stream (25MB uncompressed limit)
+    API->>API: 2. Validate SKILL.md frontmatter & skill.json
+    API->>API: 3. Verify permissions, reserved names & dependencies
+    API->>D1: 4. Check ownership & version existence
+    API->>API: 5. Compute SHA-256 hash & integrity string
+    API->>R2: 6. Conditional put (onlyIf key does not exist)
+    alt D1 Insert Succeeds
+        API->>D1: 7. INSERT skills, skill_versions, dependencies
+        API-->>CLI: 201 Created (tarballUrl, integrity)
+    else D1 Insert Fails (Conflict / Timeout)
+        API->>R2: 8. Rollback: DELETE tarball from R2
+        API-->>CLI: 409 Conflict / 500 Internal Error
+    end
+```
+
+### 9.1 Rules
+- **Conditional R2 Put**: Before writing to R2, verify that the key `skills/<name>/<version>.tgz` does not exist.
+- **Rollback on Error**: If any subsequent D1 database query fails, the newly uploaded R2 object is deleted immediately in a `try...catch` rollback block.
+- **Engine Constraint**: `UNIQUE(skill_name, version)` on table `skill_versions` prevents concurrent race conditions.
+
+---
+
+## 10. Downloads Counting & CDN Caching
+
+Download metrics are **approximate counts** designed to give the community popularity signals without crippling database performance.
+
+### 10.1 Caching Architecture
+- Download responses set:
+  ```http
+  Cache-Control: public, max-age=31536000, immutable
+  ETag: "<sha256>"
+  ```
+- Tarballs are cached heavily at Cloudflare's edge network worldwide.
+
+### 10.2 Approximate Counting & Deduplication
+- **Deduplication Window**: A download is counted at most **once per 24 hours per unique `(Client IP, Package Name, Version)` tuple**.
+- **Counting Pipeline**: Downloads are buffered via Cloudflare Rate Limiting counters or background analytics beacons rather than running immediate `UPDATE` queries on D1 on every request. This prevents loop inflation attacks and eliminates database lock contention.
+
+---
+
+## 11. Authentication, Sessions, & CSRF Security
+
+### 11.1 Web Session Cookies
+Web sessions created via GitHub OAuth utilize hardened cookie security:
+- **Cookie Attributes**:
   - `Name`: `skillapt_session`
-  - `HttpOnly`: `true` (unreadable via clientside JavaScript)
-  - `Secure`: `true` (HTTPS only, relaxed for localhost during testing)
+  - `Domain`: `.<our-domain>` (e.g. `.skillapt.dev` in production)
+  - `HttpOnly`: `true` (inaccessible to clientside scripts)
+  - `Secure`: `true` (enforced on HTTPS)
   - `SameSite`: `Lax`
-  - `Max-Age`: 30 days (2,592,000 seconds)
   - `Path`: `/`
+  - `Max-Age`: 30 days (2,592,000 seconds)
 
-### 6.2 CLI API Tokens (Bearer Auth)
+### 11.2 CSRF Protection on Mutating Requests
+Because browsers automatically attach session cookies to requests:
+- **Origin Header Verification**: Every state-changing request (`POST`, `PUT`, `DELETE`, `PATCH`) authenticated via session cookie **MUST** validate that the request `Origin` or `Referer` matches the configured site origin (e.g. `https://skillapt.dev`).
+- If the `Origin` header is missing or does not match an allowed domain, the request is rejected with `403 FORBIDDEN` (`CSRF_VIOLATION`).
+- API Bearer tokens (`apt_live_...`) are exempt from CSRF Origin checks because browsers do not attach Bearer headers automatically.
 
-For automated usage and CLI publishing:
-- Authenticated users create tokens via `POST /v1/tokens`.
-- **Raw Token Format**: `apt_live_` followed by 32 cryptographically random bytes (hex or url-safe base64), e.g. `apt_live_9f83a4c102b8d93e7f6201a4e5c891b2`.
-- **Storage Rule**: The raw token is **never** saved in the database. Only the **SHA-256** hash is stored:
-  $$\text{token\_hash} = \text{hex}(\text{SHA-256}(\text{raw\_token}))$$
-- **Display Rule**: The raw token is displayed **exactly once** in the response to `POST /v1/tokens`. It cannot be retrieved again.
-- **Verification**: The incoming `Authorization: Bearer <token>` header is hashed with SHA-256 and matched against the `token_hash` column in D1 SQLite.
-- **Revocation**: Users can list active tokens (`GET /v1/tokens`) and delete any token by ID (`DELETE /v1/tokens/:id`).
+### 11.3 Strict CORS Policy
+- Allowed origins are restricted strictly to configured web domains (e.g. `https://skillapt.dev`, `http://localhost:3000`).
+- **Never Wildcard with Credentials**: The header `Access-Control-Allow-Origin: *` is **STRICTLY FORBIDDEN** on any route returning `Access-Control-Allow-Credentials: true`.
+- If an unapproved origin makes a credentialed cross-origin request, CORS preflight fails.
 
----
-
-## 7. Error Handling Standard
-
-All endpoints return errors in a uniform JSON envelope:
-
-```json
-{
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable description of what went wrong."
-  }
-}
-```
-
-### Standard Error Codes
-
-| HTTP Status | Error Code | Meaning / Scenario |
-| :--- | :--- | :--- |
-| `400` | `BAD_REQUEST` | Malformed JSON, missing required query/body fields. |
-| `400` | `INVALID_PACKAGE` | Manifest fails Zod validation, missing SKILL.md, or invalid files. |
-| `400` | `INVALID_NAME` | Package name violates naming syntax. |
-| `400` | `INVALID_VERSION` | Version is not valid SemVer 2.0.0. |
-| `401` | `UNAUTHORIZED` | Missing or invalid authentication token/session. |
-| `403` | `FORBIDDEN` | Caller does not own the package or maintainer permissions. |
-| `404` | `NOT_FOUND` | Skill, version, or user resource does not exist. |
-| `409` | `CONFLICT` | Version already exists (immutable) or name collision. |
-| `413` | `PAYLOAD_TOO_LARGE` | Uploaded tarball exceeds 5 MB. |
-| `429` | `RATE_LIMITED` | Too many requests; rate limit threshold exceeded. |
-| `500` | `INTERNAL_ERROR` | Unexpected server error. |
+### 11.4 API Token Security
+- Format: `apt_live_<32-random-hex-chars>`.
+- Storage: SHA-256 hash digest only. Raw tokens are displayed once upon creation and never retained on the server.
 
 ---
 
-## 8. Rate Limits & Security Policies
+## 12. Rate Limiting Architecture
 
-### 8.1 Rate Limits
+Rate limiting is enforced globally using the **Cloudflare Rate Limiting binding** (or a Durable Object counter), replacing in-memory Worker maps.
 
-Cloudflare Worker KV or in-memory sliding window counters enforce rate limits:
-
-| Endpoint | Target | Limit | Window |
+| Scope / Action | Identifier | Rate Limit | Action on Breach |
 | :--- | :--- | :--- | :--- |
-| `GET /v1/skills` | Client IP | 60 requests | 1 minute |
-| `POST /v1/skills` (publish) | User Account | 10 publishes | 1 hour |
-| `POST /v1/reports` | Client IP | 5 reports | 1 hour |
-| `POST /v1/tokens` | User Account | 10 creations | 1 day |
-
-When rate-limited, the API responds with:
-- HTTP Status: `429 Too Many Requests`
-- Headers: `Retry-After: <seconds>`
-- Body: `{"error": {"code": "RATE_LIMITED", "message": "Rate limit exceeded. Please try again later."}}`
-
-### 8.2 CORS & Origin Protections
-- Allowed origins are restricted to official website domains (e.g. `https://skillapt.dev`, `https://www.skillapt.dev`) and `http://localhost:3000` / `http://localhost:5173` in local development.
-- Unauthenticated read endpoints (`GET /skills`, `GET /stats`) permit CORS `GET` for easy web integration.
-- Destructive and state-changing routes (`POST`, `DELETE`) require explicit Origin validation or Bearer tokens.
-
-### 8.3 Secrets Management
-- No secrets are stored in code or git repositories.
-- Cloudflare secrets are injected via `wrangler secret put` or local `.dev.vars` (strictly gitignored).
-- Required secrets:
-  - `GITHUB_CLIENT_ID`
-  - `GITHUB_CLIENT_SECRET`
-  - `SESSION_SECRET` (used for cookie signing)
+| **Tarball Downloads** | Client IP | 120 downloads / minute | `429 Too Many Requests` + `Retry-After` |
+| **Package Discovery / Search** | Client IP | 60 requests / minute | `429 Too Many Requests` |
+| **Publishing (`POST /v1/skills`)** | Authenticated User | 10 publishes / hour | `429 Too Many Requests` |
+| **GitHub OAuth Flow** | Client IP | 20 logins / 10 minutes | `429 Too Many Requests` |
+| **Token Creation (`POST /v1/tokens`)**| Authenticated User | 10 creations / day | `429 Too Many Requests` |
+| **Abuse Reports (`POST /v1/reports`)** | Client IP | 5 reports / hour | `429 Too Many Requests` |
+| **General API Requests** | API Token / IP | 300 requests / minute | `429 Too Many Requests` |
 
 ---
 
-## 9. API Endpoint Reference
+## 13. Client Requirements (CLI Standards)
 
-All registry endpoints are prefixed with `/v1`.
-
-### 9.1 Discovery & Search
-
-#### `GET /v1/skills`
-Search and list packages with filtering, sorting, and pagination.
-
-- **Query Parameters**:
-  - `q` (string, optional): Search query matching name, description, or keywords.
-  - `category` (string, optional): Filter by category (e.g. `documents`).
-  - `compat` (string, optional): Filter by compatibility runtime (e.g. `claude`).
-  - `verified` (boolean, optional): Filter by verified publisher status (`true` / `false`).
-  - `sort` (string, optional): Sorting criteria: `downloads` (default), `recent`, `name`.
-  - `page` (integer, optional): Page number (default: `1`).
-  - `limit` (integer, optional): Items per page (default: `20`, max: `100`).
-
-- **Response `200 OK`**:
-```json
-{
-  "skills": [
-    {
-      "name": "pdf-summarizer",
-      "latestVersion": "1.2.0",
-      "description": "Extracts text from PDF documents and generates structured agent summaries.",
-      "license": "MIT",
-      "category": "documents",
-      "compatibility": ["claude", "cursor", "codex"],
-      "downloads": 1420,
-      "verified": true,
-      "owner": {
-        "handle": "alexdev",
-        "avatarUrl": "https://avatars.githubusercontent.com/u/12345"
-      },
-      "updatedAt": "2026-11-01T12:00:00Z"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 1,
-    "totalPages": 1
-  }
-}
-```
+The official `skillapt` CLI and third-party tools must conform to these security rules:
+1. **Identical Tar Safety**: The CLI must perform the same tar inspection as the registry prior to packaging or after downloading:
+   - Reject symlinks, hardlinks, absolute paths, and `..` traversal.
+   - Stream decompression with strict 25 MB cutoff.
+   - Normalize root folder prefix safely.
+2. **Integrity Enforcement**: Verify `SHA-256(downloaded_tarball) === lockfile.integrity` before expanding any archive.
+3. **Flat Directory Resolution**: Place installed skills into `.skills/<skill-name>` without nested subdirectories.
+4. **Frontmatter Verification**: Verify that installed `SKILL.md` contains valid YAML frontmatter matching the package name.
 
 ---
 
-#### `GET /v1/skills/:name`
-Retrieve full metadata for a package, including its latest release, owner, and all available versions.
+## 14. API Specification Summary
 
-- **Path Parameters**:
-  - `:name` (string): Package name (URL-encoded if scoped, e.g. `%40team%2Fmy-skill` or `@team/my-skill`).
+All endpoints are hosted under `/v1`.
 
-- **Response `200 OK`**:
-```json
-{
-  "name": "pdf-summarizer",
-  "description": "Extracts text from PDF documents and generates structured agent summaries.",
-  "license": "MIT",
-  "repository": "https://github.com/agent-skills/pdf-summarizer",
-  "keywords": ["pdf", "summarizer", "documents"],
-  "category": "documents",
-  "compatibility": ["claude", "cursor", "codex"],
-  "owner": {
-    "handle": "alexdev",
-    "avatarUrl": "https://avatars.githubusercontent.com/u/12345"
-  },
-  "latestVersion": "1.2.0",
-  "downloads": 1420,
-  "versions": {
-    "1.2.0": {
-      "version": "1.2.0",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "size": 14250,
-      "tarballUrl": "https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz",
-      "dependencies": {
-        "text-cleaner": "^1.0.0"
-      },
-      "publishedAt": "2026-11-01T12:00:00Z",
-      "yanked": false,
-      "permissions": {
-        "network": false,
-        "shell": false,
-        "filesystem": "read"
-      }
-    },
-    "1.1.0": {
-      "version": "1.1.0",
-      "sha256": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
-      "size": 13800,
-      "tarballUrl": "https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.1.0.tgz",
-      "dependencies": {},
-      "publishedAt": "2026-10-15T09:30:00Z",
-      "yanked": false,
-      "permissions": {
-        "network": false,
-        "shell": false,
-        "filesystem": "read"
-      }
-    }
-  },
-  "readme": "# PDF Summarizer\n\nExtracts text and summarizes...",
-  "createdAt": "2026-10-15T09:30:00Z",
-  "updatedAt": "2026-11-01T12:00:00Z"
-}
-```
+### 14.1 Discovery & Search
+- `GET /v1/skills?q=&category=&compat=&verified=&sort=&page=&limit=`: Paginated package search.
+- `GET /v1/skills/:name`: Package detail, versions map, owner info, and readme.
+- `GET /v1/skills/:name/:version`: Specific version metadata including `integrity`, `sha256`, and `status`.
+- `GET /v1/skills/:name/-/:version.tgz`: Tarball download stream (`410 Gone` if status is `removed`).
 
-- **Error `404 Not Found`**:
-```json
-{
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Skill 'pdf-summarizer' does not exist."
-  }
-}
-```
+### 14.2 Publishing & Version Management
+- `POST /v1/skills`: Publish package (`multipart/form-data` with `file`). Atomic R2 upload with rollback.
+- `POST /v1/skills/:name/:version/yank`: Toggle `yanked` status (owner only).
 
----
+### 14.3 Admin & Governance
+- `POST /v1/admin/skills/:name/:version/takedown`: Mark version as `removed` with report linkage.
+- `POST /v1/admin/skills/:name/:version/restore`: Restore version from `removed` to `active`.
 
-#### `GET /v1/skills/:name/:version`
-Retrieve specific version metadata for dependency resolution and lockfile population.
+### 14.4 User & Token Management
+- `GET /v1/me`: Profile of current user.
+- `GET /v1/tokens`: List user's active API tokens.
+- `POST /v1/tokens`: Create personal API token (`apt_live_...`).
+- `DELETE /v1/tokens/:id`: Revoke an API token.
 
-- **Path Parameters**:
-  - `:name`: Package name
-  - `:version`: Exact SemVer string (e.g. `1.2.0`)
+### 14.5 Authentication
+- `GET /v1/auth/github`: Initiate OAuth login.
+- `GET /v1/auth/github/callback`: OAuth callback, cookie issuance.
+- `POST /v1/auth/logout`: Destroy session and clear cookie.
 
-- **Response `200 OK`**:
-```json
-{
-  "name": "pdf-summarizer",
-  "version": "1.2.0",
-  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "size": 14250,
-  "tarballUrl": "https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz",
-  "dependencies": {
-    "text-cleaner": "^1.0.0"
-  },
-  "publishedAt": "2026-11-01T12:00:00Z",
-  "yanked": false,
-  "permissions": {
-    "network": false,
-    "shell": false,
-    "filesystem": "read"
-  }
-}
-```
-
----
-
-#### `GET /v1/skills/:name/-/:version.tgz`
-Download the raw package tarball.
-
-- **Path Parameters**:
-  - `:name`: Package name
-  - `:version`: Exact SemVer string (without `.tgz`)
-- **Headers Returned**:
-  - `Content-Type`: `application/gzip`
-  - `Content-Disposition`: `attachment; filename="pdf-summarizer-1.2.0.tgz"`
-  - `ETag`: `"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`
-  - `Cache-Control`: `public, max-age=31536000, immutable`
-- **Response**: Binary stream of the `.tar.gz` archive.
-
----
-
-### 9.2 Publishing & Version Management
-
-#### `POST /v1/skills`
-Publish a new package or a new version of an existing package.
-
-- **Authentication**: Required (`Authorization: Bearer <token>` or active session cookie).
-- **Request Format**: `multipart/form-data`
-  - `file`: The `.tar.gz` file payload (max 5 MB).
-- **Validation Pipeline**:
-  1. Inspect multipart payload and check file size $\le$ 5 MB.
-  2. Stream tar archive; verify no zip-bombs, no symlinks, no traversal paths, no banned file types.
-  3. Extract and parse `skill.json`; validate with Zod against manifest schema.
-  4. Verify that `SKILL.md` is present and non-empty.
-  5. Check name ownership: if package exists in D1, verify caller is owner or maintainer.
-  6. Check immutability: verify version does not already exist in D1.
-  7. Compute SHA-256 hash.
-  8. Write tarball to Cloudflare R2 bucket at `skills/:name/:version.tgz`.
-  9. Insert records into D1 SQLite (`skills`, `skill_versions`, `dependencies`).
-
-- **Response `201 Created`**:
-```json
-{
-  "name": "pdf-summarizer",
-  "version": "1.2.0",
-  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "size": 14250,
-  "tarballUrl": "https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz",
-  "message": "Successfully published pdf-summarizer@1.2.0"
-}
-```
-
-- **Error `409 Conflict`**:
-```json
-{
-  "error": {
-    "code": "CONFLICT",
-    "message": "Version 1.2.0 for skill 'pdf-summarizer' has already been published and is immutable."
-  }
-}
-```
-
----
-
-#### `POST /v1/skills/:name/:version/yank`
-Yank a specific version from search and resolution.
-
-- **Authentication**: Required (must be package owner).
-- **Request Body** (optional):
-```json
-{
-  "reason": "Critical vulnerability detected in parsing routine."
-}
-```
-- **Response `200 OK`**:
-```json
-{
-  "name": "pdf-summarizer",
-  "version": "1.2.0",
-  "yanked": true,
-  "message": "Version 1.2.0 has been yanked."
-}
-```
-
----
-
-### 9.3 Authentication & Tokens
-
-#### `GET /v1/auth/github`
-Initiates GitHub OAuth flow.
-- Redirects browser to `https://github.com/login/oauth/authorize?client_id=...&state=...&scope=read:user,user:email`.
-
-#### `GET /v1/auth/github/callback`
-GitHub OAuth callback handler.
-- Exchanges authorization code for GitHub access token.
-- Retrieves GitHub user details and primary verified email.
-- Upserts user record in D1.
-- Creates session in D1 and attaches HTTP-only cookie.
-- Redirects browser to frontend dashboard (e.g. `/dashboard` or `/`).
-
-#### `POST /v1/auth/logout`
-Terminates current web session.
-- **Authentication**: Session cookie.
-- Clears session record in D1.
-- Clears `skillapt_session` cookie (`Max-Age=0`).
-- **Response `200 OK`**:
-```json
-{
-  "message": "Successfully logged out."
-}
-```
-
-#### `GET /v1/me`
-Retrieves information about the currently authenticated user.
-- **Authentication**: Required.
-- **Response `200 OK`**:
-```json
-{
-  "id": "usr_9a8b7c6d",
-  "handle": "alexdev",
-  "name": "Alex Rivers",
-  "email": "alex@example.com",
-  "avatarUrl": "https://avatars.githubusercontent.com/u/12345",
-  "createdAt": "2026-09-01T10:00:00Z"
-}
-```
-
-#### `GET /v1/tokens`
-List active API tokens created by the authenticated user.
-- **Authentication**: Required.
-- **Response `200 OK`**:
-```json
-{
-  "tokens": [
-    {
-      "id": "tok_1234abcd",
-      "name": "cli-laptop",
-      "prefix": "apt_live_9f83",
-      "createdAt": "2026-10-01T15:00:00Z",
-      "lastUsedAt": "2026-11-06T18:22:10Z"
-    }
-  ]
-}
-```
-
-#### `POST /v1/tokens`
-Generate a new API token for CLI authentication.
-- **Authentication**: Required.
-- **Request Body**:
-```json
-{
-  "name": "cli-workstation"
-}
-```
-- **Response `201 Created`**:
-```json
-{
-  "id": "tok_5678efgh",
-  "name": "cli-workstation",
-  "token": "apt_live_a1b2c3d4e5f67890123456789abcdef0",
-  "createdAt": "2026-11-07T10:00:00Z",
-  "warning": "Copy this token now. It will not be shown again."
-}
-```
-
-#### `DELETE /v1/tokens/:id`
-Revoke an API token.
-- **Authentication**: Required.
-- **Response `200 OK`**:
-```json
-{
-  "message": "Token successfully revoked."
-}
-```
-
----
-
-### 9.4 Community & Statistics
-
-#### `POST /v1/reports`
-Submit an abuse or security report against a skill.
-- **Authentication**: Public (rate limited to 5 requests / hour per IP).
-- **Request Body**:
-```json
-{
-  "skillName": "pdf-summarizer",
-  "version": "1.2.0",
-  "reason": "malware",
-  "details": "Attempts to send local API keys to remote endpoint without permission."
-}
-```
-- **Response `201 Created`**:
-```json
-{
-  "id": "rep_99182",
-  "message": "Report received and queued for review. Thank you for keeping the registry safe."
-}
-```
-
-#### `GET /v1/stats`
-Platform aggregates for the homepage.
-- **Authentication**: Public.
-- **Response `200 OK`**:
-```json
-{
-  "totalSkills": 1250,
-  "totalVersions": 4820,
-  "totalDownloads": 354920,
-  "totalAuthors": 412
-}
-```
-
----
-
-## 10. Summary of Requirements & Next Steps
-
-This specification governs all database tables, validations, APIs, and client interactions. Both the `skillapt` CLI and web UI are designed to interact directly with the contracts defined here and in `docs/openapi.yaml`.
+### 14.6 Platform
+- `GET /health` & `GET /v1/health`: System health and version checks.
+- `POST /v1/reports`: Submit package abuse report.
+- `GET /v1/stats`: Homepage metrics.
