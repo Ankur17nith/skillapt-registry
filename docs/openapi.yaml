@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Skillapt Registry API
-  version: 1.0.0
+  version: 1.1.0
   description: >
     The official REST API for the skillapt package manager and registry for AI agent skills.
     Skillapt is an independent package registry built for discovering, publishing, and
@@ -13,6 +13,18 @@ servers:
     description: Local Development Server
 
 paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns service status, product name, and registry version.
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
   /skills:
     get:
       summary: Search and list skills
@@ -93,6 +105,7 @@ paths:
                         description: Extracts text from PDF documents and generates structured agent summaries.
                         license: MIT
                         category: documents
+                        keywords: ["pdf", "summarizer", "documents"]
                         compatibility: ["claude", "cursor", "codex"]
                         downloads: 1420
                         verified: true
@@ -114,7 +127,9 @@ paths:
       summary: Publish a skill package
       description: >
         Publish a new skill package or a new version of an existing skill.
-        The package must be a .tar.gz archive <= 5MB containing skill.json and SKILL.md.
+        The package must be a .tar.gz archive <= 5MB containing valid skill.json and SKILL.md.
+        Release is atomic: tarball is committed to R2 conditionally and rolled back if D1 insertion fails.
+        Versions with build metadata (+...) or unsatisfied dependencies are rejected.
       security:
         - BearerAuth: []
         - CookieAuth: []
@@ -141,6 +156,7 @@ paths:
                 required:
                   - name
                   - version
+                  - integrity
                   - sha256
                   - size
                   - tarballUrl
@@ -152,6 +168,9 @@ paths:
                   version:
                     type: string
                     example: 1.2.0
+                  integrity:
+                    type: string
+                    example: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                   sha256:
                     type: string
                     example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -186,7 +205,7 @@ paths:
         - name: name
           in: path
           required: true
-          description: Name of the skill (can be scoped e.g. @acme/summarizer or urlencoded).
+          description: Name of the skill (can be scoped e.g. @handle/name or urlencoded).
           schema:
             type: string
       responses:
@@ -214,13 +233,16 @@ paths:
                     versions:
                       1.2.0:
                         version: 1.2.0
+                        integrity: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                         sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                         size: 14250
                         tarballUrl: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
                         dependencies:
                           text-cleaner: ^1.0.0
                         publishedAt: "2026-11-01T12:00:00Z"
+                        status: active
                         yanked: false
+                        removed: false
                         permissions:
                           network: false
                           shell: false
@@ -260,13 +282,17 @@ paths:
                   value:
                     name: pdf-summarizer
                     version: 1.2.0
+                    integrity: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                     sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                     size: 14250
                     tarballUrl: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
                     dependencies:
                       text-cleaner: ^1.0.0
                     publishedAt: "2026-11-01T12:00:00Z"
+                    status: active
                     yanked: false
+                    removed: false
+                    removalReason: null
                     permissions:
                       network: false
                       shell: false
@@ -277,7 +303,7 @@ paths:
   /skills/{name}/-/{version}.tgz:
     get:
       summary: Download package tarball
-      description: Downloads the raw `.tar.gz` package tarball. Pinned versions can be downloaded even if yanked.
+      description: Downloads the raw `.tar.gz` package tarball. Pinned versions can be downloaded even if yanked. Removed versions return 410 Gone.
       parameters:
         - name: name
           in: path
@@ -288,25 +314,29 @@ paths:
         - name: version
           in: path
           required: true
-          description: SemVer version string.
+          description: Exact SemVer string (without .tgz).
           schema:
             type: string
       responses:
         '200':
-          description: Binary package tarball
+          description: Package archive stream
           headers:
-            ETag:
+            Content-Type:
               schema:
                 type: string
-              description: SHA-256 hash or ETag of the tarball
-            Cache-Control:
-              schema:
-                type: string
-                example: public, max-age=31536000, immutable
+                example: application/gzip
             Content-Disposition:
               schema:
                 type: string
                 example: attachment; filename="pdf-summarizer-1.2.0.tgz"
+            ETag:
+              schema:
+                type: string
+                example: '"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"'
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=31536000, immutable
           content:
             application/gzip:
               schema:
@@ -314,6 +344,10 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFoundError'
+        '410':
+          $ref: '#/components/responses/GoneError'
+        '429':
+          $ref: '#/components/responses/RateLimitedError'
 
   /skills/{name}/{version}/yank:
     post:
@@ -360,19 +394,123 @@ paths:
                 properties:
                   name:
                     type: string
+                    example: pdf-summarizer
                   version:
                     type: string
+                    example: 1.2.0
                   yanked:
                     type: boolean
+                    example: true
                   message:
                     type: string
-              examples:
-                default:
-                  value:
-                    name: pdf-summarizer
-                    version: 1.2.0
-                    yanked: true
-                    message: Version 1.2.0 has been yanked.
+                    example: Version 1.2.0 has been yanked.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /admin/skills/{name}/{version}/takedown:
+    post:
+      summary: Admin takedown of a skill version
+      description: Mark a skill version as removed due to malware, copyright, or severe abuse. Download returns 410 Gone.
+      security:
+        - AdminTokenAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  description: Administrative justification for removal.
+                reportId:
+                  type: string
+                  description: ID of the originating abuse report if applicable.
+      responses:
+        '200':
+          description: Version removed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - version
+                  - status
+                  - message
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  status:
+                    type: string
+                    example: removed
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /admin/skills/{name}/{version}/restore:
+    post:
+      summary: Restore a removed skill version
+      description: Restores a removed version back to active status.
+      security:
+        - AdminTokenAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Version restored successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - version
+                  - status
+                  - message
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  status:
+                    type: string
+                    example: active
+                  message:
+                    type: string
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '403':
@@ -458,11 +596,13 @@ paths:
               properties:
                 name:
                   type: string
-                  description: Descriptive name for the token (e.g. cli-workstation).
+                  minLength: 1
+                  maxLength: 50
+                  description: Descriptive label for this token.
                   example: cli-workstation
       responses:
         '201':
-          description: API token created
+          description: Token created successfully
           content:
             application/json:
               schema:
@@ -566,7 +706,7 @@ paths:
             Set-Cookie:
               schema:
                 type: string
-                example: skillapt_session=...; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000
+                example: skillapt_session=...; Domain=.skillapt.dev; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000
             Location:
               schema:
                 type: string
@@ -602,7 +742,7 @@ paths:
   /reports:
     post:
       summary: Submit a skill report
-      description: Submit an abuse, malware, or vulnerability report against a skill package. Public endpoint rate-limited by IP.
+      description: Submit an abuse, malware, typosquat, or vulnerability report against a skill package. Public endpoint rate-limited by IP.
       requestBody:
         required: true
         content:
@@ -623,11 +763,11 @@ paths:
                   example: 1.2.0
                 reason:
                   type: string
-                  enum: [malware, spam, abusive, license_violation, other]
-                  example: malware
+                  enum: [malware, spam, abusive, license_violation, typosquat, other]
+                  example: typosquat
                 details:
                   type: string
-                  example: Attempts to access local credentials without declaring network permissions.
+                  example: Package mimics pdf-summarizer with malicious injection prompts.
       responses:
         '201':
           description: Report recorded
@@ -691,8 +831,34 @@ components:
       in: cookie
       name: skillapt_session
       description: HttpOnly session cookie issued after GitHub OAuth login
+    AdminTokenAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+      description: Administrative bearer secret for takedowns and platform governance
 
   schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - product
+        - version
+        - timestamp
+      properties:
+        status:
+          type: string
+          example: ok
+        product:
+          type: string
+          example: skillapt
+        version:
+          type: string
+          example: 1.1.0
+        timestamp:
+          type: string
+          format: date-time
+
     Category:
       type: string
       enum:
@@ -704,6 +870,13 @@ components:
         - communication
         - productivity
         - other
+
+    SkillStatus:
+      type: string
+      enum:
+        - active
+        - yanked
+        - removed
 
     Permissions:
       type: object
@@ -722,6 +895,74 @@ components:
           type: string
           enum: [none, read, write, read-write]
           description: Filesystem access scope.
+
+    SkillsManifest:
+      type: object
+      description: Format of consumer skills.json file in project root.
+      required:
+        - name
+        - skills
+      properties:
+        name:
+          type: string
+          example: my-agent-workspace
+        version:
+          type: string
+          example: 1.0.0
+        description:
+          type: string
+          example: Customer support AI agent workspace
+        skills:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            pdf-summarizer: ^1.2.0
+            "@acme/classifier": ~2.0.0
+
+    SkillsLockfile:
+      type: object
+      description: Format of consumer skills.lock.json file in project root.
+      required:
+        - lockfileVersion
+        - skills
+      properties:
+        lockfileVersion:
+          type: integer
+          example: 1
+        skills:
+          type: object
+          additionalProperties:
+            type: object
+            required:
+              - version
+              - resolved
+              - integrity
+              - sha256
+              - permissions
+              - dependencies
+            properties:
+              version:
+                type: string
+                example: 1.2.0
+              resolved:
+                type: string
+                format: uri
+                example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+              integrity:
+                type: string
+                example: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+              sha256:
+                type: string
+                example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+              category:
+                $ref: '#/components/schemas/Category'
+              permissions:
+                $ref: '#/components/schemas/Permissions'
+              dependencies:
+                type: object
+                additionalProperties:
+                  type: string
 
     User:
       type: object
@@ -776,6 +1017,7 @@ components:
         - description
         - license
         - category
+        - keywords
         - compatibility
         - downloads
         - verified
@@ -796,6 +1038,11 @@ components:
           example: MIT
         category:
           $ref: '#/components/schemas/Category'
+        keywords:
+          type: array
+          items:
+            type: string
+          example: ["pdf", "summarizer", "documents"]
         compatibility:
           type: array
           items:
@@ -818,17 +1065,23 @@ components:
       type: object
       required:
         - version
+        - integrity
         - sha256
         - size
         - tarballUrl
         - dependencies
         - publishedAt
+        - status
         - yanked
+        - removed
         - permissions
       properties:
         version:
           type: string
           example: 1.2.0
+        integrity:
+          type: string
+          example: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         sha256:
           type: string
           example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -849,7 +1102,12 @@ components:
           type: string
           format: date-time
           example: "2026-11-01T12:00:00Z"
+        status:
+          $ref: '#/components/schemas/SkillStatus'
         yanked:
+          type: boolean
+          example: false
+        removed:
           type: boolean
           example: false
         permissions:
@@ -925,12 +1183,15 @@ components:
       required:
         - name
         - version
+        - integrity
         - sha256
         - size
         - tarballUrl
         - dependencies
         - publishedAt
+        - status
         - yanked
+        - removed
         - permissions
       properties:
         name:
@@ -939,6 +1200,9 @@ components:
         version:
           type: string
           example: 1.2.0
+        integrity:
+          type: string
+          example: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         sha256:
           type: string
           example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -959,9 +1223,18 @@ components:
           type: string
           format: date-time
           example: "2026-11-01T12:00:00Z"
+        status:
+          $ref: '#/components/schemas/SkillStatus'
         yanked:
           type: boolean
           example: false
+        removed:
+          type: boolean
+          example: false
+        removalReason:
+          type: string
+          nullable: true
+          example: null
         permissions:
           $ref: '#/components/schemas/Permissions'
 
@@ -1084,6 +1357,19 @@ components:
                   code: NOT_FOUND
                   message: The requested skill or version does not exist.
 
+    GoneError:
+      description: Resource Permanently Removed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            default:
+              value:
+                error:
+                  code: GONE
+                  message: Package version has been removed by registry administrators due to a reported policy violation.
+
     ConflictError:
       description: Version or Name Conflict
       content:
@@ -1098,7 +1384,7 @@ components:
                   message: Version 1.2.0 has already been published and is immutable.
 
     InvalidPackageError:
-      description: Invalid Package Format or Manifest
+      description: Invalid Package Format, Manifest, or Frontmatter
       content:
         application/json:
           schema:
@@ -1108,7 +1394,7 @@ components:
               value:
                 error:
                   code: INVALID_PACKAGE
-                  message: Manifest skill.json failed validation or SKILL.md is missing.
+                  message: Manifest skill.json or SKILL.md failed validation.
 
     PayloadTooLargeError:
       description: Payload Exceeds Maximum Size Limit (5MB)
