@@ -67,3 +67,6 @@ app.get("/v1/health", (c) => {
 });
 
 export default app;
+
+import { skillsRouter } from "./routes/skills";
+app.route("/v1/skills", skillsRouter);
