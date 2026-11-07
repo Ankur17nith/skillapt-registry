@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment and secrets (strictly never committed)
+.dev.vars
+.env
+.env.*
+!.env.example
+*.pem
+
+# Wrangler & Cloudflare build artifacts
+.wrangler/
+dist/
+worker-bundle.js
+
+# Test & coverage
+coverage/
+.vitest/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+*.log
