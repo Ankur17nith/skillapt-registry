@@ -5,6 +5,7 @@ import type { Env } from "./types";
 
 export const app = new Hono<{ Bindings: Env }>();
 
+// Enable CORS with origin checking
 app.use("*", async (c, next) => {
   const allowedOrigins = (c.env?.CORS_ORIGIN || "http://localhost:3000,http://localhost:5173,https://skillapt.dev")
     .split(",")
@@ -23,6 +24,7 @@ app.use("*", async (c, next) => {
   })(c, next);
 });
 
+// Standard JSON error handling
 app.onError((err, c) => {
   console.error("Unhandled error:", err);
   return c.json(
@@ -36,18 +38,20 @@ app.onError((err, c) => {
   );
 });
 
+// Standard 404 handler
 app.notFound((c) => {
   return c.json(
     {
       error: {
         code: "NOT_FOUND",
-        message: 
+        message: `Endpoint ${c.req.method} ${c.req.path} not found.`
       }
     },
     404
   );
 });
 
+// Health check route
 app.get("/health", (c) => {
   return c.json({
     status: "ok",
@@ -66,7 +70,18 @@ app.get("/v1/health", (c) => {
   });
 });
 
-export default app;
-
 import { skillsRouter } from "./routes/skills";
+import { authRouter } from "./routes/auth";
+import { tokensRouter, meRouter } from "./routes/tokens";
+import { reportsRouter } from "./routes/reports";
+import { statsRouter } from "./routes/stats";
+
+// Mount API routes
 app.route("/v1/skills", skillsRouter);
+app.route("/v1/auth", authRouter);
+app.route("/v1/tokens", tokensRouter);
+app.route("/v1/me", meRouter);
+app.route("/v1/reports", reportsRouter);
+app.route("/v1/stats", statsRouter);
+
+export default app;
