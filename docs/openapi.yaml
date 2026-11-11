@@ -410,13 +410,62 @@ paths:
           $ref: '#/components/responses/ForbiddenError'
         '404':
           $ref: '#/components/responses/NotFoundError'
+    delete:
+      summary: Unyank a skill version
+      description: Restore a yanked version so that it is included in dependency resolution again (idempotent).
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Version yank status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - name
+                  - version
+                  - yanked
+                  - message
+                properties:
+                  name:
+                    type: string
+                    example: pdf-summarizer
+                  version:
+                    type: string
+                    example: 1.2.0
+                  yanked:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: Version 1.2.0 has been unyanked.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /admin/skills/{name}/{version}/takedown:
     post:
       summary: Admin takedown of a skill version
       description: Mark a skill version as removed due to malware, copyright, or severe abuse. Download returns 410 Gone.
       security:
-        - AdminTokenAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
       parameters:
         - name: name
           in: path
@@ -477,7 +526,8 @@ paths:
       summary: Restore a removed skill version
       description: Restores a removed version back to active status.
       security:
-        - AdminTokenAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
       parameters:
         - name: name
           in: path
@@ -509,6 +559,108 @@ paths:
                   status:
                     type: string
                     example: active
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /admin/reports:
+    get:
+      summary: List abuse reports (Admin)
+      description: List abuse reports submitted by users for administrative review.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, pending, reviewing, resolved, dismissed]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of abuse reports
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - reports
+                  - total
+                  - limit
+                  - offset
+                properties:
+                  reports:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /admin/reports/{id}/resolve:
+    post:
+      summary: Resolve an abuse report (Admin)
+      description: Mark an abuse report as resolved.
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Report resolved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - status
+                  - message
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    example: resolved
                   message:
                     type: string
         '401':
