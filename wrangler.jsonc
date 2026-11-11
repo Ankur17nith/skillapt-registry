@@ -35,12 +35,13 @@
       "new_sqlite_classes": ["RateLimiterDO"]
     }
   ],
+  "workers_dev": true,
   "env": {
     "production": {
       "routes": [
         {
-          "pattern": "registry.skillapt.dev/*",
-          "zone_name": "skillapt.dev"
+          "pattern": "registry.skillapt.dev",
+          "custom_domain": true
         }
       ],
       "d1_databases": [
@@ -52,6 +53,20 @@
           "migrations_dir": "migrations"
         }
       ],
+      "r2_buckets": [
+        {
+          "binding": "STORAGE",
+          "bucket_name": "skillapt-packages"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "RATE_LIMITER_DO",
+            "class_name": "RateLimiterDO"
+          }
+        ]
+      },
       "vars": {
         "ENVIRONMENT": "production"
       }
