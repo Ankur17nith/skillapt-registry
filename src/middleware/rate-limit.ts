@@ -9,18 +9,6 @@ interface RateLimitRecord {
 // In-memory sliding-window store
 const rateLimitStore = new Map<string, RateLimitRecord>();
 
-// Periodic cleanup to avoid memory leak
-if (typeof setInterval !== "undefined") {
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, record] of rateLimitStore.entries()) {
-      if (now > record.resetAt) {
-        rateLimitStore.delete(key);
-      }
-    }
-  }, 60000).unref?.();
-}
-
 export interface RateLimitOptions {
   windowMs: number;
   maxRequests: number;
