@@ -36,6 +36,9 @@ interface VersionDbRow {
   tarball_path: string;
   yanked: number;
   yank_reason: string | null;
+  status?: string;
+  removal_reason?: string | null;
+  removed_at?: string | null;
   permissions: string;
   published_by: string;
   published_at: string;
@@ -91,11 +94,11 @@ async function readSizeCappedBody(
 
 export async function recomputeLatestVersion(db: D1Database, skillName: string): Promise<string | null> {
   const versionsResult = await db.prepare(
-    "SELECT version, yanked FROM skill_versions WHERE skill_name = ?"
-  ).bind(skillName).all<{ version: string; yanked: number }>();
+    "SELECT version, yanked, status FROM skill_versions WHERE skill_name = ?"
+  ).bind(skillName).all<{ version: string; yanked: number; status?: string }>();
 
   const activeVersions = (versionsResult.results || [])
-    .filter((v: { yanked: number }) => v.yanked === 0)
+    .filter((v: { yanked: number; status?: string }) => v.yanked === 0 && v.status !== "removed")
     .map((v: { version: string }) => v.version);
 
   const stableVersions = activeVersions.filter((v: string) => semver.prerelease(v) === null);
@@ -449,14 +452,14 @@ skillsRouter.post("/", requireAuth, async (c) => {
       }
 
       const rows = await c.env.DB.prepare(`
-        SELECT v.version, v.yanked
+        SELECT v.version, v.yanked, v.status
         FROM skill_versions v
         WHERE v.skill_name = ?
-      `).bind(depName).all<{ version: string; yanked: number }>();
+      `).bind(depName).all<{ version: string; yanked: number; status?: string }>();
 
       const versions = rows.results || [];
       const satisfyingVersion = versions.find((v) => {
-        return v.yanked === 0 && semver.satisfies(v.version, depRange);
+        return v.yanked === 0 && v.status !== "removed" && semver.satisfies(v.version, depRange);
       });
 
       if (!satisfyingVersion) {
@@ -501,11 +504,11 @@ skillsRouter.post("/", requireAuth, async (c) => {
   // Determine if this newly published version is the highest stable version
   const publishedIsStable = semver.prerelease(manifest.version) === null;
   const existingVersions = await c.env.DB.prepare(
-    "SELECT version, yanked FROM skill_versions WHERE skill_name = ?"
-  ).bind(manifest.name).all<{ version: string; yanked: number }>();
+    "SELECT version, yanked, status FROM skill_versions WHERE skill_name = ?"
+  ).bind(manifest.name).all<{ version: string; yanked: number; status?: string }>();
 
   const existingActiveVersions = (existingVersions.results || [])
-    .filter((v) => v.yanked === 0)
+    .filter((v) => v.yanked === 0 && v.status !== "removed")
     .map((v) => v.version);
 
   const currentStableVersions = existingActiveVersions.filter((v) => semver.prerelease(v) === null);
@@ -618,8 +621,8 @@ skillsRouter.post("/", requireAuth, async (c) => {
     c.env.DB.prepare(`
       INSERT INTO skill_versions (
         id, skill_name, version, sha256, size, tarball_path,
-        yanked, yank_reason, permissions, published_by, published_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+        yanked, yank_reason, status, permissions, published_by, published_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, 'active', ?, ?, ?)
     `).bind(
       versionId,
       manifest.name,
@@ -729,24 +732,41 @@ skillsRouter.get("/:name", async (c) => {
       // fallback
     }
 
-    versionsMap[v.version] = {
+    const isRemoved = v.status === "removed";
+    const isYanked = Boolean(v.yanked);
+    const status = isRemoved ? "removed" : isYanked ? "yanked" : (v.status || "active");
+
+    const versionMeta: Record<string, unknown> = {
       version: v.version,
       sha256: v.sha256,
       integrity: `sha256-${v.sha256}`,
       size: v.size,
-      tarballUrl: getTarballUrl(c, skillName, v.version),
       dependencies: depsByVersion[v.version] || {},
       publishedAt: v.published_at,
-      yanked: Boolean(v.yanked),
+      status,
+      yanked: isYanked,
+      removed: isRemoved,
       permissions
     };
+
+    if (isRemoved) {
+      versionMeta.removalReason = v.removal_reason || null;
+      versionMeta.removedAt = v.removed_at || null;
+    } else {
+      versionMeta.tarballUrl = getTarballUrl(c, skillName, v.version);
+    }
+
+    versionsMap[v.version] = versionMeta;
   }
 
-  // Determine latest non-yanked version
-  const nonYankedVersions = (versionsResult.results || [])
+  // Determine latest non-yanked, non-removed version
+  const nonRemovedVersions = (versionsResult.results || [])
+    .filter((v) => v.status !== "removed");
+  const nonYankedVersions = nonRemovedVersions
     .filter((v) => v.yanked === 0)
     .map((v) => v.version);
-  const candidateVersions = nonYankedVersions.length > 0 ? nonYankedVersions : versionStrings;
+  const nonRemovedVersionStrings = nonRemovedVersions.map((v) => v.version);
+  const candidateVersions = nonYankedVersions.length > 0 ? nonYankedVersions : nonRemovedVersionStrings;
   const latestVersion = candidateVersions.sort(semver.rcompare)[0] || "0.0.0";
 
   let keywords: string[] = [];
@@ -821,18 +841,32 @@ skillsRouter.get("/:name/:version", async (c) => {
     // fallback
   }
 
-  return c.json({
+  const isRemoved = versionRow.status === "removed";
+  const isYanked = Boolean(versionRow.yanked);
+  const status = isRemoved ? "removed" : isYanked ? "yanked" : (versionRow.status || "active");
+
+  const responsePayload: Record<string, unknown> = {
     name: skillName,
     version: versionRow.version,
     sha256: versionRow.sha256,
     integrity: `sha256-${versionRow.sha256}`,
     size: versionRow.size,
-    tarballUrl: getTarballUrl(c, skillName, versionRow.version),
     dependencies,
     publishedAt: versionRow.published_at,
-    yanked: Boolean(versionRow.yanked),
+    status,
+    yanked: isYanked,
+    removed: isRemoved,
     permissions
-  });
+  };
+
+  if (isRemoved) {
+    responsePayload.removalReason = versionRow.removal_reason || null;
+    responsePayload.removedAt = versionRow.removed_at || null;
+  } else {
+    responsePayload.tarballUrl = getTarballUrl(c, skillName, versionRow.version);
+  }
+
+  return c.json(responsePayload);
 });
 
 // 4. GET /v1/skills/:name/-/:file - Download tarball
@@ -868,6 +902,22 @@ skillsRouter.get("/:name/-/:file", async (c) => {
         }
       },
       404
+    );
+  }
+
+  if (versionRow.status === "removed") {
+    c.header("Cache-Control", "no-store");
+    return c.json(
+      {
+        error: {
+          code: "GONE",
+          message: `Version '${version}' of skill '${skillName}' has been removed by administrators.`
+        },
+        status: "removed",
+        removed: true,
+        removalReason: versionRow.removal_reason || null
+      },
+      410
     );
   }
 
@@ -946,8 +996,8 @@ skillsRouter.post("/:name/:version/yank", requireAuth, async (c) => {
 
   // Check version existence
   const versionRow = await c.env.DB.prepare(
-    "SELECT id, yanked FROM skill_versions WHERE skill_name = ? AND version = ?"
-  ).bind(skillName, versionParam).first<{ id: string; yanked: number }>();
+    "SELECT id, yanked, status FROM skill_versions WHERE skill_name = ? AND version = ?"
+  ).bind(skillName, versionParam).first<{ id: string; yanked: number; status?: string }>();
 
   if (!versionRow) {
     return c.json(
@@ -968,25 +1018,104 @@ skillsRouter.post("/:name/:version/yank", requireAuth, async (c) => {
     // optional body
   }
 
+  if (body.reason && body.reason.length > 500) {
+    return c.json(
+      {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Yank reason must not exceed 500 characters."
+        }
+      },
+      400
+    );
+  }
+
   const yankReason = body.reason?.trim() || "Yanked by owner";
-  const newYankedStatus = versionRow.yanked === 1 ? 0 : 1;
+  const newStatus = versionRow.status === "removed" ? "removed" : "yanked";
 
   await c.env.DB.prepare(`
     UPDATE skill_versions
-    SET yanked = ?, yank_reason = ?
+    SET yanked = 1, status = ?, yank_reason = ?
     WHERE skill_name = ? AND version = ?
-  `).bind(newYankedStatus, newYankedStatus === 1 ? yankReason : null, skillName, versionParam).run();
+  `).bind(newStatus, yankReason, skillName, versionParam).run();
 
   await recomputeLatestVersion(c.env.DB, skillName);
 
   return c.json({
     name: skillName,
     version: versionParam,
-    yanked: newYankedStatus === 1,
-    message:
-      newYankedStatus === 1
-        ? `Version ${versionParam} has been yanked.`
-        : `Version ${versionParam} has been unyanked.`
+    yanked: true,
+    message: `Version ${versionParam} has been yanked.`
+  });
+});
+
+// 6. DELETE /v1/skills/:name/:version/yank - Un-yank a version (idempotent)
+skillsRouter.delete("/:name/:version/yank", requireAuth, async (c) => {
+  const user = c.get("user");
+  const skillName = normalizeSkillName(c.req.param("name") || "");
+  const versionParam = c.req.param("version") || "";
+
+  // Check ownership
+  const skill = await c.env.DB.prepare(
+    "SELECT owner_id FROM skills WHERE name = ?"
+  ).bind(skillName).first<{ owner_id: string }>();
+
+  if (!skill) {
+    return c.json(
+      {
+        error: {
+          code: "NOT_FOUND",
+          message: `Skill '${skillName}' does not exist.`
+        }
+      },
+      404
+    );
+  }
+
+  if (skill.owner_id !== user.userId) {
+    return c.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only the package owner can unyank versions."
+        }
+      },
+      403
+    );
+  }
+
+  // Check version existence
+  const versionRow = await c.env.DB.prepare(
+    "SELECT id, yanked, status FROM skill_versions WHERE skill_name = ? AND version = ?"
+  ).bind(skillName, versionParam).first<{ id: string; yanked: number; status?: string }>();
+
+  if (!versionRow) {
+    return c.json(
+      {
+        error: {
+          code: "NOT_FOUND",
+          message: `Version '${versionParam}' of skill '${skillName}' was not found.`
+        }
+      },
+      404
+    );
+  }
+
+  const newStatus = versionRow.status === "removed" ? "removed" : "active";
+
+  await c.env.DB.prepare(`
+    UPDATE skill_versions
+    SET yanked = 0, status = ?, yank_reason = NULL
+    WHERE skill_name = ? AND version = ?
+  `).bind(newStatus, skillName, versionParam).run();
+
+  await recomputeLatestVersion(c.env.DB, skillName);
+
+  return c.json({
+    name: skillName,
+    version: versionParam,
+    yanked: false,
+    message: `Version ${versionParam} has been unyanked.`
   });
 });
 
