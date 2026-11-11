@@ -306,20 +306,32 @@ stateDiagram-v2
 | `yanked` | **Excluded** | Available | Visible with `yanked: true` | `200 OK` |
 | `removed` | **Excluded** | **Blocked** | Visible as `{ status: "removed", removed: true }` | **`410 Gone`** |
 
-### 8.2 Yanking (`POST /v1/skills/:name/:version/yank`)
+### 8.2 Yanking (`POST /v1/skills/:name/:version/yank` and `DELETE /v1/skills/:name/:version/yank`)
 - Performed by the package owner.
+- `POST /v1/skills/:name/:version/yank` is idempotent: it sets `yanked = true` and accepts an optional `reason` (max 500 characters). Subsequent POSTs are no-ops.
+- `DELETE /v1/skills/:name/:version/yank` is idempotent: it clears `yanked = false` (un-yanks the version).
 - Yanks hide the version from automatic range resolution, but pinned downloads continue to function for existing lockfiles.
 
 ### 8.3 Admin Takedowns (`status = "removed"`)
 When a package is found to contain malware, prompt injection, or severe copyright violations:
 1. The version status is updated to `removed` and linked to the originating `report_id`.
-2. Tarball downloads (`GET /v1/skills/:name/-/:version.tgz`) return **`410 Gone`** with explanation.
-3. Metadata reflects `status: "removed"`, `removed: true`, and omits the `tarballUrl`.
-4. **Admin Route**: `POST /v1/admin/skills/:name/:version/takedown` (requires `X-Admin-Token` or `ADMIN_SECRET`).
-5. **Direct D1 Procedure** (Emergency / Manual):
+2. Tarball downloads (`GET /v1/skills/:name/-/:version.tgz`) return **`410 Gone`** with explanation and `Cache-Control: no-store`.
+3. Metadata reflects `status: "removed"`, `removed: true`, `removalReason`, and omits the `tarballUrl`.
+4. **Admin Routes**:
+   - `POST /v1/admin/skills/:name/:version/takedown` (sets status to `removed`, logs to `audit_log`)
+   - `POST /v1/admin/skills/:name/:version/restore` (restores status to `active` or `yanked`, logs to `audit_log`)
+   - `GET /v1/admin/reports` (lists abuse reports)
+   - `POST /v1/admin/reports/:id/resolve` (resolves report, logs to `audit_log`)
+   - Authorization requires an authenticated user with `users.role = 'admin'` (Bearer token or session).
+5. **Bootstrapping the First Admin**:
+   To bootstrap an admin user in production:
+   ```bash
+   wrangler d1 execute DB --remote --command="UPDATE users SET role = 'admin' WHERE handle = '<handle>';"
+   ```
+6. **Direct D1 Procedure** (Emergency / Manual):
    ```sql
    UPDATE skill_versions 
-   SET status = 'removed', yank_reason = 'Admin Takedown: Malware report rep_12345'
+   SET status = 'removed', removal_reason = 'Admin Takedown: Malware report rep_12345', removed_at = datetime('now')
    WHERE skill_name = 'malicious-skill' AND version = '1.0.0';
    ```
 

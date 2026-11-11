@@ -240,7 +240,7 @@ Documentation for ${name}.`;
 
       // Unyank 2.0.0 -> latest_version restored to 2.0.0
       const unyankRes = await app.request("/v1/skills/yank-maint-tool/2.0.0/yank", {
-        method: "POST",
+        method: "DELETE",
         headers: { Authorization: `Bearer ${alexToken}` }
       }, env);
       expect(unyankRes.status).toBe(200);

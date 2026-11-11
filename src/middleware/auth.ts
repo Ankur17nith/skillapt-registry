@@ -17,6 +17,7 @@ interface UserDbRow {
   name: string;
   email: string | null;
   avatar_url: string;
+  role: string;
 }
 
 export async function authenticate(c: Context<{ Bindings: Env }>): Promise<UserSession | null> {
@@ -32,7 +33,7 @@ export async function authenticate(c: Context<{ Bindings: Env }>): Promise<UserS
     const tokenRow = await c.env.DB.prepare(`
       SELECT 
         t.id as token_id, t.user_id,
-        u.id, u.github_id, u.handle, u.name, u.email, u.avatar_url
+        u.id, u.github_id, u.handle, u.name, u.email, u.avatar_url, u.role
       FROM api_tokens t
       JOIN users u ON t.user_id = u.id
       WHERE t.token_hash = ?
@@ -60,7 +61,8 @@ export async function authenticate(c: Context<{ Bindings: Env }>): Promise<UserS
       handle: tokenRow.handle,
       name: tokenRow.name,
       email: tokenRow.email,
-      avatarUrl: tokenRow.avatar_url
+      avatarUrl: tokenRow.avatar_url,
+      role: tokenRow.role || "user"
     };
 
     c.set("user", sessionUser);
@@ -74,7 +76,7 @@ export async function authenticate(c: Context<{ Bindings: Env }>): Promise<UserS
     const sessionRow = await c.env.DB.prepare(`
       SELECT 
         s.id as session_id, s.expires_at,
-        u.id, u.github_id, u.handle, u.name, u.email, u.avatar_url
+        u.id, u.github_id, u.handle, u.name, u.email, u.avatar_url, u.role
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.id = ?
@@ -93,7 +95,8 @@ export async function authenticate(c: Context<{ Bindings: Env }>): Promise<UserS
       handle: sessionRow.handle,
       name: sessionRow.name,
       email: sessionRow.email,
-      avatarUrl: sessionRow.avatar_url
+      avatarUrl: sessionRow.avatar_url,
+      role: sessionRow.role || "user"
     };
 
     c.set("user", sessionUser);
@@ -115,6 +118,33 @@ export async function requireAuth(c: Context<{ Bindings: Env }>, next: Next): Pr
         }
       },
       401
+    );
+  }
+  return next();
+}
+
+export async function requireAdmin(c: Context<{ Bindings: Env }>, next: Next): Promise<Response | void> {
+  const user = await authenticate(c);
+  if (!user) {
+    return c.json(
+      {
+        error: {
+          code: "UNAUTHORIZED",
+          message: "Authentication required. Provide a valid Bearer token or session."
+        }
+      },
+      401
+    );
+  }
+  if (user.role !== "admin") {
+    return c.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Admin role required to perform this action."
+        }
+      },
+      403
     );
   }
   return next();
