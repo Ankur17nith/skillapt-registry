@@ -30,10 +30,10 @@ export const CompatibilityEnum = z.enum([
 ]);
 
 export const PermissionsSchema = z.object({
-  network: z.boolean({ required_error: "permissions.network is required" }),
-  shell: z.boolean({ required_error: "permissions.shell is required" }),
-  filesystem: z.enum(["none", "read", "write", "read-write"], {
-    required_error: "permissions.filesystem must be one of: none, read, write, read-write"
+  network: z.boolean({ message: "permissions.network is required" }),
+  shell: z.boolean({ message: "permissions.shell is required" }),
+  filesystem: z.enum(["none", "read", "write", "read-write"] as const, {
+    message: "permissions.filesystem must be one of: none, read, write, read-write"
   })
 });
 
@@ -118,7 +118,8 @@ export type ValidatedSkillManifest = z.infer<typeof SkillManifestSchema>;
 export function validateManifest(rawJson: unknown): { success: true; data: ValidatedSkillManifest } | { success: false; errors: string[] } {
   const result = SkillManifestSchema.safeParse(rawJson);
   if (!result.success) {
-    const errorMessages = result.error.errors.map((err) => `${err.path.join(".")}: ${err.message}`);
+    const issues = result.error.issues || (result.error as any).errors || [];
+    const errorMessages = issues.map((err: any) => `${err.path.join(".")}: ${err.message}`);
     return { success: false, errors: errorMessages };
   }
   return { success: true, data: result.data };
