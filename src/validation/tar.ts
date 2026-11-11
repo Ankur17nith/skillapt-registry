@@ -1,4 +1,10 @@
-import { LIMITS, ALLOWED_FILE_EXTENSIONS, ALLOWED_SPECIAL_FILES } from "../config";
+import yaml from "yaml";
+import {
+  LIMITS,
+  ALLOWED_FILE_EXTENSIONS,
+  ALLOWED_SPECIAL_FILES,
+  ALLOWED_EXTENSIONLESS_FILES
+} from "../config";
 import { validateManifest, type ValidatedSkillManifest } from "./manifest";
 
 export interface PackageValidationResult {
@@ -70,14 +76,102 @@ function parseOctal(buffer: Uint8Array, offset: number, length: number): number 
 }
 
 /**
- * Parses null-terminated ASCII/UTF-8 string from header block.
+ * Parses null-terminated ASCII string from header block without trimming.
  */
-function parseString(buffer: Uint8Array, offset: number, length: number): string {
+function parseRawHeaderString(buffer: Uint8Array, offset: number, length: number): string {
   let end = offset;
   while (end < offset + length && buffer[end] !== 0) {
     end++;
   }
-  return new TextDecoder("utf-8").decode(buffer.subarray(offset, end)).trim();
+  return new TextDecoder("utf-8").decode(buffer.subarray(offset, end));
+}
+
+/**
+ * Verifies standard ustar/POSIX tar header checksum.
+ */
+function verifyHeaderChecksum(header: Uint8Array): boolean {
+  const recordedChecksum = parseOctal(header, 148, 8);
+  let unsignedSum = 0;
+  let signedSum = 0;
+
+  for (let i = 0; i < 512; i++) {
+    const byteVal = i >= 148 && i < 156 ? 0x20 : header[i];
+    unsignedSum += byteVal;
+    signedSum += byteVal > 127 ? byteVal - 256 : byteVal;
+  }
+
+  return recordedChecksum === unsignedSum || recordedChecksum === signedSum;
+}
+
+/**
+ * Parses PAX extended header records.
+ */
+function parsePaxRecords(data: Uint8Array): Map<string, string> {
+  const text = new TextDecoder("utf-8").decode(data);
+  const records = new Map<string, string>();
+  let pos = 0;
+
+  while (pos < text.length) {
+    const spaceIdx = text.indexOf(" ", pos);
+    if (spaceIdx === -1) break;
+    const lenStr = text.slice(pos, spaceIdx);
+    const length = parseInt(lenStr, 10);
+    if (isNaN(length) || length <= 0) break;
+
+    const recordEnd = pos + length;
+    const line = text.slice(spaceIdx + 1, recordEnd - 1); // exclude trailing newline
+    const eqIdx = line.indexOf("=");
+    if (eqIdx !== -1) {
+      const key = line.slice(0, eqIdx);
+      const val = line.slice(eqIdx + 1);
+      records.set(key, val);
+    }
+    pos = recordEnd;
+  }
+
+  return records;
+}
+
+/**
+ * Checks magic bytes in the first 512 bytes of a file.
+ */
+function detectForbiddenMagicBytes(data: Uint8Array): string | null {
+  if (data.length < 2) return null;
+
+  // PE "MZ" executable
+  if (data[0] === 0x4d && data[1] === 0x5a) {
+    return "PE executable (MZ)";
+  }
+
+  if (data.length >= 4) {
+    // ELF executable
+    if (data[0] === 0x7f && data[1] === 0x45 && data[2] === 0x4c && data[3] === 0x46) {
+      return "ELF binary";
+    }
+
+    // WASM binary
+    if (data[0] === 0x00 && data[1] === 0x61 && data[2] === 0x73 && data[3] === 0x6d) {
+      return "WebAssembly binary";
+    }
+
+    // Java class file / Mach-O Fat Binary
+    if (data[0] === 0xca && data[1] === 0xfe && data[2] === 0xba && data[3] === 0xbe) {
+      return "Java class / Mach-O universal binary";
+    }
+    if (data[0] === 0xbe && data[1] === 0xba && data[2] === 0xfe && data[3] === 0xca) {
+      return "Mach-O universal binary";
+    }
+
+    // Mach-O 32-bit and 64-bit binaries
+    if (
+      (data[0] === 0xfe && data[1] === 0xed && data[2] === 0xfa && (data[3] === 0xce || data[3] === 0xcf)) ||
+      (data[3] === 0xfe && data[2] === 0xed && data[1] === 0xfa && (data[0] === 0xce || data[0] === 0xcf))
+    ) {
+      return "Mach-O binary";
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -107,11 +201,21 @@ export async function inspectAndValidateTarball(
     };
   }
 
+  if (tarBytes.byteLength > LIMITS.MAX_UNCOMPRESSED_SIZE_BYTES) {
+    return {
+      success: false,
+      error: `Decompressed archive size exceeds limit of 25 MB.`
+    };
+  }
+
   let offset = 0;
   let fileCount = 0;
+  let totalDeclaredSize = 0;
   const entries: TarEntry[] = [];
-  let skillJsonData: Uint8Array | null = null;
-  let skillMdContent: string | null = null;
+  const seenPaths = new Set<string>();
+
+  let pendingPaxPath: string | null = null;
+  let pendingPaxSize: number | null = null;
 
   while (offset + 512 <= tarBytes.length) {
     const header = tarBytes.subarray(offset, offset + 512);
@@ -122,66 +226,194 @@ export async function inspectAndValidateTarball(
       break;
     }
 
-    // Read file name (support ustar prefix)
-    const namePart = parseString(header, 0, 100);
-    const prefixPart = parseString(header, 345, 155);
-    const fullPath = prefixPart ? `${prefixPart}/${namePart}` : namePart;
-
-    if (!fullPath) {
-      offset += 512;
-      continue;
-    }
-
-    // Path security: check path length
-    if (fullPath.length > LIMITS.MAX_PATH_LENGTH) {
+    // Verify header checksum
+    if (!verifyHeaderChecksum(header)) {
       return {
         success: false,
-        error: `File path '${fullPath}' exceeds maximum length of ${LIMITS.MAX_PATH_LENGTH} characters.`
+        error: "Tar header checksum verification failed: corrupted archive."
       };
     }
 
-    // Path security: Traversal and Absolute Path checks
-    if (fullPath.includes("\0")) {
-      return { success: false, error: "File path contains invalid null bytes." };
-    }
-    if (fullPath.startsWith("/") || fullPath.startsWith("\\") || /^[a-zA-Z]:/.test(fullPath)) {
-      return { success: false, error: `Absolute paths are strictly forbidden: '${fullPath}'` };
-    }
-    const pathSegments = fullPath.split(/[/\\]/);
-    if (pathSegments.includes("..")) {
-      return {
-        success: false,
-        error: `Path traversal detected in archive entry: '${fullPath}'`
-      };
-    }
-
-    // Read type flag and size
     const typeFlag = String.fromCharCode(header[156]) || "0";
-    const size = parseOctal(header, 124, 12);
+    let rawSize = parseOctal(header, 124, 12);
 
-    // Security: Reject symlinks, hardlinks, character/block devices, and FIFOs
-    if (typeFlag === "1" || typeFlag === "2") {
-      return {
-        success: false,
-        error: `Symlinks and hardlinks are strictly prohibited in packages: '${fullPath}'`
-      };
-    }
-    if (typeFlag === "3" || typeFlag === "4" || typeFlag === "6") {
-      return {
-        success: false,
-        error: `Special device/FIFO files are strictly prohibited: '${fullPath}'`
-      };
-    }
+    // Read header name and prefix without trimming
+    const namePart = parseRawHeaderString(header, 0, 100);
+    const prefixPart = parseRawHeaderString(header, 345, 155);
+    let headerPath = prefixPart ? `${prefixPart}/${namePart}` : namePart;
 
     offset += 512;
 
-    // Is this a directory?
-    const isDirectory = typeFlag === "5" || fullPath.endsWith("/");
-    if (isDirectory) {
+    // Handle PAX extended headers ('x')
+    if (typeFlag === "x") {
+      const paxData = tarBytes.subarray(offset, offset + rawSize);
+      offset += Math.ceil(rawSize / 512) * 512;
+      const paxRecords = parsePaxRecords(paxData);
+      if (paxRecords.has("path")) {
+        pendingPaxPath = paxRecords.get("path")!;
+      }
+      if (paxRecords.has("size")) {
+        pendingPaxSize = parseInt(paxRecords.get("size")!, 10);
+      }
       continue;
     }
 
-    // Regular file validation
+    // Reject PAX global ('g') headers
+    if (typeFlag === "g") {
+      return {
+        success: false,
+        error: "PAX global extended headers ('g') are not permitted."
+      };
+    }
+
+    // Reject GNU long name/link headers ('L', 'K')
+    if (typeFlag === "L" || typeFlag === "K") {
+      return {
+        success: false,
+        error: "GNU long path/link headers are not permitted. Standard PAX headers must be used."
+      };
+    }
+
+    // Reject symlinks, hardlinks, character/block devices, FIFOs
+    if (typeFlag === "1" || typeFlag === "2") {
+      return {
+        success: false,
+        error: `Symlinks and hardlinks are strictly prohibited in packages: '${headerPath}'`
+      };
+    }
+    if (typeFlag !== "0" && typeFlag !== "\0" && typeFlag !== "5") {
+      return {
+        success: false,
+        error: `Unsupported tar entry type flag '${typeFlag}': '${headerPath}'`
+      };
+    }
+
+    // Determine EFFECTIVE path and size
+    const effectivePath = pendingPaxPath !== null ? pendingPaxPath : headerPath;
+    const effectiveSize = pendingPaxSize !== null ? pendingPaxSize : rawSize;
+
+    // Reset pending PAX values
+    pendingPaxPath = null;
+    pendingPaxSize = null;
+
+    if (!effectivePath) {
+      offset += Math.ceil(rawSize / 512) * 512;
+      continue;
+    }
+
+    // Path security: strict validation on effective path
+    if (effectivePath.length > LIMITS.MAX_PATH_LENGTH) {
+      return {
+        success: false,
+        error: `File path '${effectivePath}' exceeds maximum length of ${LIMITS.MAX_PATH_LENGTH} characters.`
+      };
+    }
+
+    // Reject control characters
+    if (/[\x00-\x1F\x7F]/.test(effectivePath)) {
+      return {
+        success: false,
+        error: `File path '${effectivePath}' contains invalid control characters.`
+      };
+    }
+
+    // Reject backslashes
+    if (effectivePath.includes("\\")) {
+      return {
+        success: false,
+        error: `File path '${effectivePath}' contains backslashes. Use forward slashes only.`
+      };
+    }
+
+    // Check for leading or trailing spaces on the overall path
+    if (effectivePath.startsWith(" ") || effectivePath.endsWith(" ")) {
+      return {
+        success: false,
+        error: `File path '${effectivePath}' contains leading or trailing spaces.`
+      };
+    }
+
+    // Reject absolute paths
+    if (effectivePath.startsWith("/") || /^[a-zA-Z]:/.test(effectivePath)) {
+      return {
+        success: false,
+        error: `Absolute paths are strictly forbidden: '${effectivePath}'`
+      };
+    }
+
+    // Check path segments
+    const isDirEntry = typeFlag === "5" || effectivePath.endsWith("/");
+    const cleanPath = isDirEntry && effectivePath.endsWith("/")
+      ? effectivePath.slice(0, -1)
+      : effectivePath;
+
+    const segments = cleanPath.split("/");
+
+    // Reject empty segments (e.g. double slash "//")
+    if (segments.some((s) => s.length === 0)) {
+      return {
+        success: false,
+        error: `File path '${effectivePath}' contains empty segments.`
+      };
+    }
+
+    // Reject leading/trailing spaces in individual segments
+    if (segments.some((s) => s.trim() !== s)) {
+      return {
+        success: false,
+        error: `File path segment contains leading or trailing spaces in '${effectivePath}'.`
+      };
+    }
+
+    // Reject path traversal
+    if (segments.includes("..") || segments.includes(".")) {
+      return {
+        success: false,
+        error: `Path traversal detected in archive entry: '${effectivePath}'`
+      };
+    }
+
+    // Reject hidden rule on EVERY path segment (files and directories)
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (seg.startsWith(".")) {
+        const isLeaf = i === segments.length - 1 && !isDirEntry;
+        if (!isLeaf || !ALLOWED_SPECIAL_FILES.has(seg)) {
+          return {
+            success: false,
+            error: isLeaf
+              ? `Hidden file '${seg}' is not permitted in package: '${effectivePath}'`
+              : `Hidden path segment '${seg}' is not permitted: '${effectivePath}'`
+          };
+        }
+      }
+    }
+
+    // Reject duplicate paths (NFC normalized and case-insensitive)
+    const normalizedKey = effectivePath.normalize("NFC").toLowerCase();
+    if (seenPaths.has(normalizedKey)) {
+      return {
+        success: false,
+        error: `Duplicate path detected in archive: '${effectivePath}'`
+      };
+    }
+    seenPaths.add(normalizedKey);
+
+    // Sum of declared entry sizes
+    totalDeclaredSize += effectiveSize;
+    if (totalDeclaredSize > LIMITS.MAX_UNCOMPRESSED_SIZE_BYTES) {
+      return {
+        success: false,
+        error: `Total declared uncompressed size exceeds limit of 25 MB.`
+      };
+    }
+
+    if (isDirEntry) {
+      offset += Math.ceil(rawSize / 512) * 512;
+      continue;
+    }
+
+    // Regular file checks
     fileCount++;
     if (fileCount > LIMITS.MAX_FILE_COUNT) {
       return {
@@ -190,83 +422,179 @@ export async function inspectAndValidateTarball(
       };
     }
 
-    // Extract file payload
-    const fileData = tarBytes.subarray(offset, offset + size);
-    offset += Math.ceil(size / 512) * 512;
+    // Extract payload
+    const fileData = tarBytes.subarray(offset, offset + effectiveSize);
+    offset += Math.ceil(rawSize / 512) * 512;
 
-    // Check file extension safety
-    const basename = pathSegments[pathSegments.length - 1];
-    const isSpecialAllowed = ALLOWED_SPECIAL_FILES.has(basename);
+    // Check allowlist first
+    const leafName = segments[segments.length - 1];
+    const isSpecialAllowed = ALLOWED_SPECIAL_FILES.has(leafName);
+    const isExtensionlessAllowed = ALLOWED_EXTENSIONLESS_FILES.has(leafName.toLowerCase());
 
-    if (basename.startsWith(".") && !isSpecialAllowed) {
-      return {
-        success: false,
-        error: `Hidden file '${basename}' is not permitted in package.`
-      };
+    const dotIndex = leafName.lastIndexOf(".");
+    const ext = dotIndex !== -1 ? leafName.slice(dotIndex).toLowerCase() : "";
+
+    if (!isSpecialAllowed && !isExtensionlessAllowed) {
+      if (!ext || !ALLOWED_FILE_EXTENSIONS.has(ext)) {
+        return {
+          success: false,
+          error: `File type '${ext || leafName}' is not permitted in skill packages: '${effectivePath}'`
+        };
+      }
     }
 
-    const dotIndex = basename.lastIndexOf(".");
-    const ext = dotIndex !== -1 ? basename.slice(dotIndex).toLowerCase() : "";
-
-    if (!isSpecialAllowed && (!ext || !ALLOWED_FILE_EXTENSIONS.has(ext))) {
+    // Check magic bytes for forbidden binary signatures (even with an allowed extension)
+    const forbiddenMagic = detectForbiddenMagicBytes(fileData);
+    if (forbiddenMagic) {
       return {
         success: false,
-        error: `File type '${ext || basename}' is not permitted in skill packages.`
+        error: `Executable or binary file detected (${forbiddenMagic}): '${effectivePath}'`
       };
-    }
-
-    // Normalize path by ignoring single root directory wrapper (e.g. "my-skill/skill.json" -> "skill.json")
-    const normalizedParts = pathSegments.filter((p) => p !== "." && p !== "");
-    const isSkillJson =
-      normalizedParts.length === 1 && normalizedParts[0] === "skill.json" ||
-      normalizedParts.length === 2 && normalizedParts[1] === "skill.json";
-
-    const isSkillMd =
-      normalizedParts.length === 1 && normalizedParts[0] === "SKILL.md" ||
-      normalizedParts.length === 2 && normalizedParts[1] === "SKILL.md";
-
-    if (isSkillJson) {
-      skillJsonData = fileData;
-    } else if (isSkillMd) {
-      skillMdContent = new TextDecoder("utf-8").decode(fileData).trim();
     }
 
     entries.push({
-      path: fullPath,
-      size,
+      path: effectivePath,
+      size: effectiveSize,
       typeFlag,
       data: fileData
     });
   }
 
-  // 3. Verify required files
-  if (!skillJsonData) {
+  // Check if any regular files were found
+  if (entries.length === 0) {
     return {
       success: false,
-      error: "Package archive is missing required 'skill.json' manifest file."
+      error: "Archive contains no files."
     };
   }
 
-  if (!skillMdContent) {
+  // 3. Layout validation: files at root or under exactly one wrapper directory
+  // Find common wrapper directory if any
+  const firstSegments = new Set(entries.map((e) => e.path.split("/")[0]));
+  let wrapperDir: string | null = null;
+
+  if (firstSegments.size === 1) {
+    const candidateWrapper = Array.from(firstSegments)[0];
+    const allHaveWrapper = entries.every((e) => {
+      const parts = e.path.split("/");
+      return parts.length > 1 && parts[0] === candidateWrapper;
+    });
+    if (allHaveWrapper) {
+      wrapperDir = candidateWrapper;
+    }
+  }
+
+  // If some files are at root and some are in multiple roots without a single wrapper,
+  // check if any root files exist alongside subdirectories with different roots
+  if (!wrapperDir && firstSegments.size > 1) {
+    // If multiple root segments exist, files MUST be at root level or standard subdirectories,
+    // but cannot be split across multiple top-level wrapper directories if no files at root
+    const hasFilesAtRoot = entries.some((e) => !e.path.includes("/"));
+    if (!hasFilesAtRoot) {
+      return {
+        success: false,
+        error: "Package archive layout invalid: files are divided under multiple top-level directories."
+      };
+    }
+  }
+
+  // Strip wrapper if present to determine package-root paths
+  let skillJsonData: Uint8Array | null = null;
+  let skillMdData: Uint8Array | null = null;
+  let skillJsonCount = 0;
+  let skillMdCount = 0;
+
+  for (const entry of entries) {
+    const parts = entry.path.split("/");
+    const strippedParts = wrapperDir ? parts.slice(1) : parts;
+    const strippedPath = strippedParts.join("/");
+
+    if (strippedPath === "skill.json") {
+      skillJsonCount++;
+      skillJsonData = entry.data;
+    } else if (strippedParts[strippedParts.length - 1] === "skill.json") {
+      return {
+        success: false,
+        error: `Manifest confusion: 'skill.json' must only exist at package root, found at '${entry.path}'.`
+      };
+    }
+
+    if (strippedPath === "SKILL.md") {
+      skillMdCount++;
+      skillMdData = entry.data;
+    } else if (strippedParts[strippedParts.length - 1] === "SKILL.md") {
+      return {
+        success: false,
+        error: `Manifest confusion: 'SKILL.md' must only exist at package root, found at '${entry.path}'.`
+      };
+    }
+  }
+
+  if (skillJsonCount !== 1 || !skillJsonData) {
+    return {
+      success: false,
+      error: "Package archive is missing required 'skill.json' manifest file at package root."
+    };
+  }
+
+  if (
+    skillMdCount !== 1 ||
+    !skillMdData ||
+    new TextDecoder("utf-8").decode(skillMdData).trim().length === 0
+  ) {
     return {
       success: false,
       error: "Package archive is missing required 'SKILL.md' documentation file or it is empty."
     };
   }
 
-  // 4. Validate skill.json content against Zod schema
-  let parsedJson: unknown;
+  // 4. Validate SKILL.md size and YAML frontmatter
+  if (skillMdData.byteLength > LIMITS.MAX_SKILL_MD_SIZE_BYTES) {
+    return {
+      success: false,
+      error: `SKILL.md size (${skillMdData.byteLength} bytes) exceeds maximum limit of 256 KB.`
+    };
+  }
+
+  const skillMdContent = new TextDecoder("utf-8").decode(skillMdData);
+  const frontmatterMatch = skillMdContent.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+
+  if (!frontmatterMatch) {
+    return {
+      success: false,
+      error: "SKILL.md must begin with YAML frontmatter delimited by '---'."
+    };
+  }
+
+  let parsedFrontmatter: Record<string, unknown>;
+  try {
+    parsedFrontmatter = yaml.parse(frontmatterMatch[1]);
+    if (!parsedFrontmatter || typeof parsedFrontmatter !== "object") {
+      return {
+        success: false,
+        error: "SKILL.md frontmatter must be a valid YAML object."
+      };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      error: `SKILL.md frontmatter YAML parsing error: ${err instanceof Error ? err.message : "invalid YAML"}`
+    };
+  }
+
+  // 5. Parse and validate skill.json
+  let parsedManifestJson: unknown;
   try {
     const jsonString = new TextDecoder("utf-8").decode(skillJsonData);
-    parsedJson = JSON.parse(jsonString);
-  } catch (err) {
+    parsedManifestJson = JSON.parse(jsonString);
+  } catch {
     return {
       success: false,
       error: "Failed to parse 'skill.json' manifest: invalid JSON syntax."
     };
   }
 
-  const manifestValidation = validateManifest(parsedJson);
+  const manifestValidation = validateManifest(parsedManifestJson);
   if (!manifestValidation.success) {
     return {
       success: false,
@@ -274,9 +602,31 @@ export async function inspectAndValidateTarball(
     };
   }
 
+  const manifest = manifestValidation.data;
+
+  // Validate SKILL.md frontmatter fields against manifest
+  const unscopedName = manifest.name.includes("/") ? manifest.name.split("/")[1] : manifest.name;
+
+  if (parsedFrontmatter.name !== unscopedName) {
+    return {
+      success: false,
+      error: `SKILL.md frontmatter name '${parsedFrontmatter.name}' must match unscoped package name '${unscopedName}'.`
+    };
+  }
+
+  if (
+    typeof parsedFrontmatter.description !== "string" ||
+    parsedFrontmatter.description.trim().length === 0
+  ) {
+    return {
+      success: false,
+      error: "SKILL.md frontmatter description must be a non-empty string."
+    };
+  }
+
   return {
     success: true,
-    manifest: manifestValidation.data,
+    manifest,
     readme: skillMdContent,
     fileCount,
     uncompressedSize: tarBytes.byteLength

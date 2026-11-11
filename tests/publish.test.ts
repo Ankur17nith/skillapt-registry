@@ -33,7 +33,13 @@ describe("Publish Endpoint (POST /v1/skills)", () => {
     }
   };
 
-  const sampleSkillMd = "# New Super Skill\n\nAutomates tests for AI agents.";
+  const sampleSkillMd = `---
+name: new-super-skill
+description: An innovative AI agent skill for automated testing.
+---
+# New Super Skill
+
+Automates tests for AI agents.`;
 
   beforeEach(async () => {
     mockDb = new MockD1Database();
@@ -229,7 +235,7 @@ describe("Publish Endpoint (POST /v1/skills)", () => {
 
     const tarGz = buildTarGz([
       { path: "skill.json", content: JSON.stringify(newVersionManifest) },
-      { path: "SKILL.md", content: "# Hijack" }
+      { path: "SKILL.md", content: "---\nname: pdf-summarizer\ndescription: Attempted hijacking by another author.\n---\n# Hijack" }
     ]);
 
     const res = await app.request(
