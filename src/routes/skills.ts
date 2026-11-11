@@ -7,12 +7,16 @@ import { computeSha256 } from "../utils/crypto";
 import { requireAuth } from "../middleware/auth";
 import { rateLimit, getClientIp } from "../middleware/rate-limit";
 import { LIMITS } from "../config";
+import { ALLOWED_CATEGORIES } from "../validation/manifest";
 
 export const skillsRouter = new Hono<{ Bindings: Env }>();
+
+const ALLOWED_SORTS = new Set(["downloads", "name", "updated"]);
 
 interface SkillDbRow {
   name: string;
   owner_id: string;
+  latest_version?: string | null;
   description: string;
   license: string;
   repository: string | null;
@@ -128,86 +132,108 @@ skillsRouter.get(
     keyGenerator: (c) => `search:${getClientIp(c)}`
   }),
   async (c) => {
-  const q = c.req.query("q")?.trim() || "";
-  const category = c.req.query("category")?.trim();
-  const compat = c.req.query("compat")?.trim();
-  const verifiedStr = c.req.query("verified")?.trim();
-  const sort = c.req.query("sort") || "downloads";
-  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "20", 10) || 20));
-  const offset = (page - 1) * limit;
+    let q = c.req.query("q")?.trim() || "";
+    if (q.length > 100) {
+      q = q.slice(0, 100);
+    }
 
-  const conditions: string[] = [];
-  const params: unknown[] = [];
+    const sort = c.req.query("sort") || "downloads";
+    if (!ALLOWED_SORTS.has(sort)) {
+      return c.json(
+        {
+          error: {
+            code: "BAD_REQUEST",
+            message: "Invalid sort parameter. Allowed: downloads, name, updated"
+          }
+        },
+        400
+      );
+    }
 
-  if (q) {
-    conditions.push("(s.name LIKE ? OR s.description LIKE ? OR s.keywords LIKE ?)");
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
-  }
+    const category = c.req.query("category")?.trim();
+    if (category && !ALLOWED_CATEGORIES.has(category)) {
+      return c.json(
+        {
+          error: {
+            code: "BAD_REQUEST",
+            message: `Invalid category. Allowed: ${Array.from(ALLOWED_CATEGORIES).join(", ")}`
+          }
+        },
+        400
+      );
+    }
 
-  if (category) {
-    conditions.push("s.category = ?");
-    params.push(category);
-  }
+    const compat = c.req.query("compat")?.trim();
+    const verifiedStr = c.req.query("verified")?.trim();
+    const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "20", 10) || 20));
+    const offset = (page - 1) * limit;
 
-  if (compat) {
-    conditions.push("s.compatibility LIKE ?");
-    params.push(`%"${compat}"%`);
-  }
+    const conditions: string[] = [];
+    const params: unknown[] = [];
 
-  if (verifiedStr !== undefined && verifiedStr !== "") {
-    const verifiedVal = verifiedStr === "true" || verifiedStr === "1" ? 1 : 0;
-    conditions.push("s.verified = ?");
-    params.push(verifiedVal);
-  }
+    if (q) {
+      const escapedQ = q.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      conditions.push(
+        "(s.name LIKE ? ESCAPE '\\' OR s.description LIKE ? ESCAPE '\\' OR s.keywords LIKE ? ESCAPE '\\')"
+      );
+      params.push(`%${escapedQ}%`, `%${escapedQ}%`, `%${escapedQ}%`);
+    }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    if (category) {
+      conditions.push("s.category = ?");
+      params.push(category);
+    }
 
-  // Sort order
-  let orderBy = "s.downloads DESC, s.updated_at DESC";
-  if (sort === "recent") {
-    orderBy = "s.updated_at DESC";
-  } else if (sort === "name") {
-    orderBy = "s.name ASC";
-  }
+    if (compat) {
+      conditions.push("s.compatibility LIKE ?");
+      params.push(`%"${compat}"%`);
+    }
 
-  // Count total matching
-  const countSql = `SELECT COUNT(*) as total FROM skills s ${whereClause}`;
-  const totalCount = await c.env.DB.prepare(countSql).bind(...params).first<number>("total") ?? 0;
+    if (verifiedStr !== undefined && verifiedStr !== "") {
+      const verifiedVal = verifiedStr === "true" || verifiedStr === "1" ? 1 : 0;
+      conditions.push("s.verified = ?");
+      params.push(verifiedVal);
+    }
 
-  // Fetch paginated skills joined with owner
-  const querySql = `
-    SELECT 
-      s.name, s.description, s.license, s.category, s.keywords, s.compatibility,
-      s.downloads, s.verified, s.updated_at,
-      u.handle as owner_handle, u.avatar_url as owner_avatar
-    FROM skills s
-    LEFT JOIN users u ON s.owner_id = u.id
-    ${whereClause}
-    ORDER BY ${orderBy}
-    LIMIT ? OFFSET ?
-  `;
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  const queryParams = [...params, limit, offset];
-  const rows = await c.env.DB.prepare(querySql).bind(...queryParams).all<SkillDbRow>();
+    // Sort order
+    let orderBy = "s.downloads DESC, s.updated_at DESC";
+    if (sort === "updated") {
+      orderBy = "s.updated_at DESC";
+    } else if (sort === "name") {
+      orderBy = "s.name ASC";
+    }
 
-  // Fetch latest non-yanked version for each skill
-  const skillSummaries = await Promise.all(
-    (rows.results || []).map(async (row) => {
-      const versions = await c.env.DB.prepare(
-        "SELECT version, yanked FROM skill_versions WHERE skill_name = ?"
-      ).bind(row.name).all<{ version: string; yanked: number }>();
+    // Count total matching
+    const countSql = `SELECT COUNT(*) as total FROM skills s ${whereClause}`;
+    const totalCount = (await c.env.DB.prepare(countSql).bind(...params).first<number>("total")) ?? 0;
 
-      // Filter out yanked versions if possible, or pick max semver
-      const validVersions = (versions.results || [])
-        .filter((v) => v.yanked === 0)
-        .map((v) => v.version);
+    // Fetch paginated skills joined with owner (relies on latest_version to eliminate N+1)
+    const querySql = `
+      SELECT 
+        s.name,
+        COALESCE(s.latest_version, (
+          SELECT sv.version FROM skill_versions sv
+          WHERE sv.skill_name = s.name AND (sv.yanked = 0 OR sv.yanked IS NULL)
+          ORDER BY sv.version DESC
+          LIMIT 1
+        ), '0.0.0') as latest_version,
+        s.description, s.license, s.category, s.keywords, s.compatibility,
+        s.downloads, s.verified, s.updated_at,
+        u.handle as owner_handle, u.avatar_url as owner_avatar
+      FROM skills s
+      LEFT JOIN users u ON s.owner_id = u.id
+      ${whereClause}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `;
 
-      const fallbackVersions = (versions.results || []).map((v) => v.version);
-      const versionList = validVersions.length > 0 ? validVersions : fallbackVersions;
+    const queryParams = [...params, limit, offset];
+    const rows = await c.env.DB.prepare(querySql).bind(...queryParams).all<SkillDbRow>();
 
-      const latestVersion = versionList.sort(semver.rcompare)[0] || "0.0.0";
-
+    const skillSummaries = (rows.results || []).map((row) => {
       let keywords: string[] = [];
       let compatibility: string[] = [];
       try {
@@ -223,7 +249,7 @@ skillsRouter.get(
 
       return {
         name: row.name,
-        latestVersion,
+        latestVersion: row.latest_version || "0.0.0",
         description: row.description,
         license: row.license,
         category: row.category,
@@ -237,19 +263,19 @@ skillsRouter.get(
         },
         updatedAt: row.updated_at
       };
-    })
-  );
+    });
 
-  return c.json({
-    skills: skillSummaries,
-    pagination: {
-      page,
-      limit,
-      total: totalCount,
-      totalPages: Math.ceil(totalCount / limit) || 1
-    }
-  });
-});
+    return c.json({
+      skills: skillSummaries,
+      pagination: {
+        page,
+        limit,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limit) || 1
+      }
+    });
+  }
+);
 
 // 2. POST /v1/skills - Publish a skill package
 skillsRouter.post(
@@ -872,7 +898,8 @@ skillsRouter.get("/:name/:version", async (c) => {
 });
 
 // 4. GET /v1/skills/:name/-/:file - Download tarball
-skillsRouter.get(
+skillsRouter.on(
+  ["GET", "HEAD"],
   "/:name/-/:file",
   rateLimit({
     windowMs: 60 * 1000, // 1 minute
@@ -880,93 +907,128 @@ skillsRouter.get(
     keyGenerator: (c) => `download:${getClientIp(c)}`
   }),
   async (c) => {
-  const skillName = normalizeSkillName(c.req.param("name") || "");
-  const file = c.req.param("file") || "";
+    const isHead = c.req.method.toUpperCase() === "HEAD";
+    const skillName = normalizeSkillName(c.req.param("name") || "");
+    const file = c.req.param("file") || "";
 
-  if (!file.endsWith(".tgz")) {
-    return c.json(
-      {
-        error: {
-          code: "BAD_REQUEST",
-          message: "Requested archive must have a .tgz extension."
-        }
-      },
-      400
-    );
-  }
-
-  const version = file.slice(0, -4);
-
-  // Check version existence in database
-  const versionRow = await c.env.DB.prepare(
-    "SELECT * FROM skill_versions WHERE skill_name = ? AND version = ?"
-  ).bind(skillName, version).first<VersionDbRow>();
-
-  if (!versionRow) {
-    return c.json(
-      {
-        error: {
-          code: "NOT_FOUND",
-          message: `Package '${skillName}@${version}' not found.`
-        }
-      },
-      404
-    );
-  }
-
-  if (versionRow.status === "removed") {
-    c.header("Cache-Control", "no-store");
-    return c.json(
-      {
-        error: {
-          code: "GONE",
-          message: `Version '${version}' of skill '${skillName}' has been removed by administrators.`
+    if (!file.endsWith(".tgz")) {
+      return c.json(
+        {
+          error: {
+            code: "BAD_REQUEST",
+            message: "Requested archive must have a .tgz extension."
+          }
         },
-        status: "removed",
-        removed: true,
-        removalReason: versionRow.removal_reason || null
-      },
-      410
-    );
-  }
+        400
+      );
+    }
 
-  // Fetch package bytes from R2
-  const r2Object = await c.env.STORAGE.get(versionRow.tarball_path);
-  if (!r2Object) {
-    return c.json(
-      {
-        error: {
-          code: "NOT_FOUND",
-          message: `Package archive file for '${skillName}@${version}' is missing from storage.`
+    const version = file.slice(0, -4);
+
+    // Check version existence in database
+    const versionRow = await c.env.DB.prepare(
+      "SELECT * FROM skill_versions WHERE skill_name = ? AND version = ?"
+    ).bind(skillName, version).first<VersionDbRow>();
+
+    if (!versionRow) {
+      return c.json(
+        {
+          error: {
+            code: "NOT_FOUND",
+            message: `Package '${skillName}@${version}' not found.`
+          }
+        },
+        404
+      );
+    }
+
+    if (versionRow.status === "removed") {
+      c.header("Cache-Control", "no-store");
+      return c.json(
+        {
+          error: {
+            code: "GONE",
+            message: `Version '${version}' of skill '${skillName}' has been removed by administrators.`
+          },
+          status: "removed",
+          removed: true,
+          removalReason: versionRow.removal_reason || null
+        },
+        410
+      );
+    }
+
+    const safeFilename = `${skillName.replace(/[@/]/g, "-")}-${version}.tgz`;
+    const etag = `"${versionRow.sha256}"`;
+    const cacheControl = versionRow.yanked === 1
+      ? "public, max-age=300"
+      : "public, max-age=31536000, immutable";
+
+    c.header("Content-Type", "application/gzip");
+    c.header("Content-Disposition", `attachment; filename="${safeFilename}"`);
+    c.header("ETag", etag);
+    c.header("Cache-Control", cacheControl);
+
+    // Handle If-None-Match (ETag or sha256 match) -> 304 Not Modified
+    const ifNoneMatch = c.req.header("if-none-match");
+    if (ifNoneMatch) {
+      const matchTokens = ifNoneMatch.split(",").map((t) => t.trim().replace(/^W\//, ""));
+      if (
+        matchTokens.includes(etag) ||
+        matchTokens.includes(`"${versionRow.sha256}"`) ||
+        matchTokens.includes(versionRow.sha256) ||
+        matchTokens.includes("*")
+      ) {
+        return c.body(null, 304);
+      }
+    }
+
+    // Fetch package bytes from R2
+    const r2Object = await c.env.STORAGE.get(versionRow.tarball_path);
+    if (!r2Object) {
+      return c.json(
+        {
+          error: {
+            code: "NOT_FOUND",
+            message: `Package archive file for '${skillName}@${version}' is missing from storage.`
+          }
+        },
+        404
+      );
+    }
+
+    // Dedupe download counts:
+    // Skip counting for HEAD and Range requests
+    const hasRange = Boolean(c.req.header("range"));
+    if (!isHead && !hasRange) {
+      const clientIp = getClientIp(c);
+      const salt = c.env.REPORT_SALT || "skillapt-default-salt";
+      const ipHash = await computeSha256(new TextEncoder().encode(clientIp + salt));
+      const day = new Date().toISOString().slice(0, 10);
+
+      try {
+        const dedupeRes = await c.env.DB.prepare(
+          "INSERT OR IGNORE INTO download_dedupe (skill_name, version, ip_hash, day) VALUES (?, ?, ?, ?)"
+        ).bind(skillName, version, ipHash, day).run();
+
+        if ((dedupeRes.meta?.changes ?? 0) > 0) {
+          await c.env.DB.prepare("UPDATE skills SET downloads = downloads + 1 WHERE name = ?")
+            .bind(skillName)
+            .run();
         }
-      },
-      404
-    );
+      } catch {
+        // Ignore dedupe error
+      }
+    }
+
+    if (isHead) {
+      return c.body(null);
+    }
+
+    // Stream R2 body directly
+    return c.body(r2Object.body);
   }
-
-  // Increment download count
-  try {
-    c.executionCtx.waitUntil(
-      c.env.DB.prepare("UPDATE skills SET downloads = downloads + 1 WHERE name = ?")
-        .bind(skillName)
-        .run()
-    );
-  } catch {
-    await c.env.DB.prepare("UPDATE skills SET downloads = downloads + 1 WHERE name = ?")
-      .bind(skillName)
-      .run();
-  }
-
-  const safeFilename = `${skillName.replace(/[@/]/g, "-")}-${version}.tgz`;
-
-  c.header("Content-Type", "application/gzip");
-  c.header("Content-Disposition", `attachment; filename="${safeFilename}"`);
-  c.header("ETag", `"${versionRow.sha256}"`);
-  c.header("Cache-Control", "public, max-age=31536000, immutable");
-
-  const buffer = await r2Object.arrayBuffer();
-  return c.body(buffer);
-});
+);
 
 // 5. POST /v1/skills/:name/:version/yank - Yank or unyank a version
 skillsRouter.post("/:name/:version/yank", requireAuth, async (c) => {

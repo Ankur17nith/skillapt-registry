@@ -18,6 +18,8 @@ export const CategoryEnum = z.enum([
   "other"
 ]);
 
+export const ALLOWED_CATEGORIES: Set<string> = new Set<string>(CategoryEnum.options);
+
 export const CompatibilityEnum = z.enum([
   "claude",
   "cursor",

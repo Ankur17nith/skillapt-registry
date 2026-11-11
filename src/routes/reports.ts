@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { rateLimit, getClientIp } from "../middleware/rate-limit";
+import { computeSha256 } from "../utils/crypto";
 import type { Env } from "../types";
 
 export const reportsRouter = new Hono<{ Bindings: Env }>();
@@ -62,6 +63,18 @@ reportsRouter.post("/", async (c) => {
     );
   }
 
+  if (details.length > 2000) {
+    return c.json(
+      {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Field 'details' cannot exceed 2000 characters."
+        }
+      },
+      400
+    );
+  }
+
   if (!ALLOWED_REASONS.has(reason)) {
     return c.json(
       {
@@ -91,15 +104,36 @@ reportsRouter.post("/", async (c) => {
     );
   }
 
+  // Check if version exists in skill_versions or is "*"
+  if (version !== "*") {
+    const versionRow = await c.env.DB.prepare(
+      "SELECT version FROM skill_versions WHERE skill_name = ? AND version = ?"
+    ).bind(skillName, version).first();
+
+    if (!versionRow) {
+      return c.json(
+        {
+          error: {
+            code: "BAD_REQUEST",
+            message: `Version '${version}' does not exist for skill '${skillName}'.`
+          }
+        },
+        400
+      );
+    }
+  }
+
   const reporterIp = getClientIp(c);
+  const salt = c.env.REPORT_SALT || "skillapt-default-salt";
+  const reporterHash = await computeSha256(new TextEncoder().encode(reporterIp + salt));
 
   const reportId = generateReportId();
   const now = new Date().toISOString();
 
   await c.env.DB.prepare(`
-    INSERT INTO reports (id, skill_name, version, reason, details, reporter_ip, status, created_at)
+    INSERT INTO reports (id, skill_name, version, reason, details, reporter_hash, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-  `).bind(reportId, skillName, version, reason, details, reporterIp, now).run();
+  `).bind(reportId, skillName, version, reason, details, reporterHash, now).run();
 
   return c.json(
     {

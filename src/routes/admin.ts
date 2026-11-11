@@ -162,7 +162,7 @@ adminRouter.get("/reports", async (c) => {
   const total = (await c.env.DB.prepare(countSql).bind(...params).first<number>("total")) ?? 0;
 
   const querySql = `
-    SELECT id, skill_name, version, reason, details, status, created_at
+    SELECT id, skill_name, version, reason, details, reporter_hash, status, created_at
     FROM reports
     ${whereClause}
     ORDER BY created_at DESC

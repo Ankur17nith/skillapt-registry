@@ -10,6 +10,7 @@ export interface Env {
   CORS_ORIGIN?: string;
   RATE_LIMITER_DO?: DurableObjectNamespace;
   RATE_LIMITER?: RateLimiter;
+  REPORT_SALT?: string;
 }
 
 export type PermissionFilesystem = "none" | "read" | "write" | "read-write";

@@ -123,11 +123,12 @@ describe("Yank, Abuse Reports, Rate Limits, and Stats", () => {
       // Verify report in database
       const report = await mockDb.prepare("SELECT * FROM reports WHERE id = ?")
         .bind(body.id)
-        .first<{ reason: string; details: string; reporter_ip: string }>();
+        .first<{ reason: string; details: string; reporter_ip: string | null; reporter_hash: string }>();
 
       expect(report).toBeDefined();
       expect(report?.reason).toBe("malware");
-      expect(report?.reporter_ip).toBe("198.51.100.1");
+      expect(report?.reporter_ip).toBeUndefined();
+      expect(report?.reporter_hash).toMatch(/^[a-f0-9]{64}$/);
     });
 
     it("enforces rate limit of 5 reports per hour per IP", async () => {
