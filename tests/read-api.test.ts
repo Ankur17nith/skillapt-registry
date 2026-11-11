@@ -120,7 +120,7 @@ describe("Read API Endpoints (/v1/skills)", () => {
       const body = await res.json() as any;
       expect(body.name).toBe("pdf-summarizer");
       expect(body.version).toBe("1.2.0");
-      expect(body.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+      expect(body.sha256).toBe("0f6fca4a57687bd3e4fb4b54d4c25eff32239a5a869595b2189bb5df3ec664a1");
       expect(body.dependencies["text-cleaner"]).toBe("^1.0.0");
       expect(body.permissions.filesystem).toBe("read");
       expect(body.yanked).toBe(false);

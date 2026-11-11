@@ -20,7 +20,7 @@ export class MockD1Database {
     }
   }
 
-  public applySeed(seedPath = path.resolve(__dirname, "../../migrations/seed.sql")): void {
+  public applySeed(seedPath = path.resolve(__dirname, "../fixtures/seed.sql")): void {
     if (fs.existsSync(seedPath)) {
       const sql = fs.readFileSync(seedPath, "utf8");
       this.db.exec(sql);
