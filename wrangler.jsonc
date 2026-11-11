@@ -2,8 +2,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "skillapt-registry",
   "main": "src/index.ts",
-  "compatibility_date": "2024-09-23",
+  "compatibility_date": "2025-02-14",
   "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -18,7 +21,26 @@
       "bucket_name": "skillapt-packages"
     }
   ],
-  "vars": {
-    "ENVIRONMENT": "development"
+  "env": {
+    "production": {
+      "routes": [
+        {
+          "pattern": "registry.skillapt.dev/*",
+          "zone_name": "skillapt.dev"
+        }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "skillapt-db-prod",
+          // PLACEHOLDER: Replace with actual production D1 database UUID after `wrangler d1 create skillapt-db-prod`
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production"
+      }
+    }
   }
 }

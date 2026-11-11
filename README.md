@@ -154,7 +154,6 @@ Never commit secrets to git. Inject them securely via Wrangler:
 ```bash
 npx wrangler secret put GITHUB_CLIENT_ID
 npx wrangler secret put GITHUB_CLIENT_SECRET
-npx wrangler secret put SESSION_SECRET
 ```
 
 ### 6. Deploy the Worker
