@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { app } from "../src/index";
 import { MockD1Database } from "./helpers/mock-d1";
 import { MockR2Bucket } from "./helpers/mock-r2";
+import { computeSha256 } from "../src/utils/crypto";
 import type { Env } from "../src/types";
 
 describe("Authentication, Sessions, and API Tokens", () => {
@@ -53,17 +54,19 @@ describe("Authentication, Sessions, and API Tokens", () => {
     });
 
     it("returns authenticated user details using valid session cookie", async () => {
-      // Insert a test session for usr_sarahai
+      // Insert a test session for usr_sarahai (stored as sha256)
+      const rawSession = "ses_test_sarah";
+      const sessionHash = await computeSha256(new TextEncoder().encode(rawSession));
       const expiresAt = new Date(Date.now() + 86400000).toISOString();
       await mockDb.prepare(
         "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
-      ).bind("ses_test_sarah", "usr_sarahai", expiresAt, new Date().toISOString()).run();
+      ).bind(sessionHash, "usr_sarahai", expiresAt, new Date().toISOString()).run();
 
       const res = await app.request(
         "/v1/me",
         {
           headers: {
-            Cookie: "skillapt_session=ses_test_sarah"
+            Cookie: `skillapt_session=${rawSession}`
           }
         },
         env
@@ -74,23 +77,29 @@ describe("Authentication, Sessions, and API Tokens", () => {
       expect(body.handle).toBe("sarahai");
     });
 
-    it("rejects expired session cookies", async () => {
+    it("rejects expired session cookies and deletes them from DB", async () => {
+      const rawSession = "ses_expired";
+      const sessionHash = await computeSha256(new TextEncoder().encode(rawSession));
       const expiredTime = new Date(Date.now() - 86400000).toISOString();
       await mockDb.prepare(
         "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
-      ).bind("ses_expired", "usr_sarahai", expiredTime, new Date().toISOString()).run();
+      ).bind(sessionHash, "usr_sarahai", expiredTime, new Date().toISOString()).run();
 
       const res = await app.request(
         "/v1/me",
         {
           headers: {
-            Cookie: "skillapt_session=ses_expired"
+            Cookie: `skillapt_session=${rawSession}`
           }
         },
         env
       );
 
       expect(res.status).toBe(401);
+
+      // Verify expired session was deleted on lookup
+      const inDb = await mockDb.prepare("SELECT * FROM sessions WHERE id = ?").bind(sessionHash).first();
+      expect(inDb).toBeNull();
     });
   });
 
@@ -112,8 +121,8 @@ describe("Authentication, Sessions, and API Tokens", () => {
       expect(body.tokens[0].prefix).toBe("apt_live_test");
     });
 
-    it("creates a new API token, hashes it with SHA-256, and returns token once", async () => {
-      const createRes = await app.request(
+    it("rejects token creation via Bearer token with 403 FORBIDDEN", async () => {
+      const res = await app.request(
         "/v1/tokens",
         {
           method: "POST",
@@ -126,11 +135,39 @@ describe("Authentication, Sessions, and API Tokens", () => {
         env
       );
 
+      expect(res.status).toBe(403);
+      const body = await res.json() as any;
+      expect(body.error.code).toBe("FORBIDDEN");
+    });
+
+    it("creates a new API token via session cookie, hashes it with SHA-256, and returns token once", async () => {
+      // Create session for usr_alexdev
+      const rawSession = "ses_alex_session_create";
+      const sessionHash = await computeSha256(new TextEncoder().encode(rawSession));
+      await mockDb.prepare(
+        "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
+      ).bind(sessionHash, "usr_alexdev", new Date(Date.now() + 86400000).toISOString(), new Date().toISOString()).run();
+
+      const createRes = await app.request(
+        "/v1/tokens",
+        {
+          method: "POST",
+          headers: {
+            Cookie: `skillapt_session=${rawSession}`,
+            Origin: "https://skillapt.dev",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ name: "cli-ubuntu" })
+        },
+        env
+      );
+
       expect(createRes.status).toBe(201);
       const createBody = await createRes.json() as any;
       expect(createBody.name).toBe("cli-ubuntu");
       expect(createBody.token).toMatch(/^apt_live_[a-f0-9]{32}$/);
       expect(createBody.warning).toContain("Copy this token now");
+      expect(createBody.expiresAt).toBeDefined();
 
       const newToken = createBody.token;
 
@@ -152,12 +189,26 @@ describe("Authentication, Sessions, and API Tokens", () => {
       const meBody = await meRes.json() as any;
       expect(meBody.handle).toBe("alexdev");
 
-      // Revoke the token
-      const deleteRes = await app.request(
+      // Reject token revocation via Bearer token
+      const rejectDeleteRes = await app.request(
         `/v1/tokens/${createBody.id}`,
         {
           method: "DELETE",
           headers: { Authorization: `Bearer ${validToken}` }
+        },
+        env
+      );
+      expect(rejectDeleteRes.status).toBe(403);
+
+      // Revoke the token via session cookie
+      const deleteRes = await app.request(
+        `/v1/tokens/${createBody.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Cookie: `skillapt_session=${rawSession}`,
+            Origin: "https://skillapt.dev"
+          }
         },
         env
       );
@@ -175,12 +226,19 @@ describe("Authentication, Sessions, and API Tokens", () => {
     });
 
     it("returns 400 when creating token with invalid name", async () => {
+      const rawSession = "ses_alex_invalid_test";
+      const sessionHash = await computeSha256(new TextEncoder().encode(rawSession));
+      await mockDb.prepare(
+        "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
+      ).bind(sessionHash, "usr_alexdev", new Date(Date.now() + 86400000).toISOString(), new Date().toISOString()).run();
+
       const res = await app.request(
         "/v1/tokens",
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${validToken}`,
+            Cookie: `skillapt_session=${rawSession}`,
+            Origin: "https://skillapt.dev",
             "Content-Type": "application/json"
           },
           body: JSON.stringify({ name: "   " })
@@ -193,16 +251,21 @@ describe("Authentication, Sessions, and API Tokens", () => {
 
   describe("POST /v1/auth/logout", () => {
     it("deletes session from database and clears cookie", async () => {
+      const rawSession = "ses_to_logout";
+      const sessionHash = await computeSha256(new TextEncoder().encode(rawSession));
       const expiresAt = new Date(Date.now() + 86400000).toISOString();
       await mockDb.prepare(
         "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)"
-      ).bind("ses_to_logout", "usr_alexdev", expiresAt, new Date().toISOString()).run();
+      ).bind(sessionHash, "usr_alexdev", expiresAt, new Date().toISOString()).run();
 
       const res = await app.request(
         "/v1/auth/logout",
         {
           method: "POST",
-          headers: { Cookie: "skillapt_session=ses_to_logout" }
+          headers: {
+            Cookie: `skillapt_session=${rawSession}`,
+            Origin: "https://skillapt.dev"
+          }
         },
         env
       );
@@ -210,7 +273,7 @@ describe("Authentication, Sessions, and API Tokens", () => {
       expect(res.status).toBe(200);
 
       const inDb = await mockDb.prepare("SELECT * FROM sessions WHERE id = ?")
-        .bind("ses_to_logout")
+        .bind(sessionHash)
         .first();
       expect(inDb).toBeNull();
     });

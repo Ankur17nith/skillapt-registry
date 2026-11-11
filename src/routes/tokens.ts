@@ -52,11 +52,12 @@ tokensRouter.get("/", async (c) => {
   const user = c.get("user");
 
   const tokens = await c.env.DB.prepare(
-    "SELECT id, name, prefix, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC"
+    "SELECT id, name, prefix, expires_at, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC"
   ).bind(user.userId).all<{
     id: string;
     name: string;
     prefix: string;
+    expires_at: string | null;
     created_at: string;
     last_used_at: string | null;
   }>();
@@ -66,6 +67,7 @@ tokensRouter.get("/", async (c) => {
       id: t.id,
       name: t.name,
       prefix: t.prefix,
+      expiresAt: t.expires_at,
       createdAt: t.created_at,
       lastUsedAt: t.last_used_at
     }))
@@ -74,9 +76,22 @@ tokensRouter.get("/", async (c) => {
 
 // POST /v1/tokens - Create a new API token
 tokensRouter.post("/", async (c) => {
+  const authMethod = c.get("authMethod");
+  if (authMethod !== "session") {
+    return c.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Creating API tokens requires an active cookie session."
+        }
+      },
+      403
+    );
+  }
+
   const user = c.get("user");
 
-  let body: { name?: string };
+  let body: { name?: string; expiresAt?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -104,24 +119,63 @@ tokensRouter.post("/", async (c) => {
     );
   }
 
+  const now = new Date().toISOString();
+
+  // Enforce max 20 active tokens per user
+  const activeCount = (await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM api_tokens WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+  ).bind(user.userId, now).first<number>("count")) ?? 0;
+
+  if (activeCount >= 20) {
+    return c.json(
+      {
+        error: {
+          code: "LIMIT_EXCEEDED",
+          message: "Maximum limit of 20 active API tokens reached. Revoke an existing token first."
+        }
+      },
+      400
+    );
+  }
+
+  // Handle optional expiresAt (default 90 days)
+  let expiresAt: string;
+  if (body.expiresAt) {
+    const expDate = new Date(body.expiresAt);
+    if (isNaN(expDate.getTime()) || expDate.getTime() <= Date.now()) {
+      return c.json(
+        {
+          error: {
+            code: "BAD_REQUEST",
+            message: "expiresAt must be a valid future ISO 8601 date timestamp."
+          }
+        },
+        400
+      );
+    }
+    expiresAt = expDate.toISOString();
+  } else {
+    expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  }
+
   // Generate token: apt_live_...
   const randomHex = generateTokenHex(16); // 32 hex chars
   const rawToken = `apt_live_${randomHex}`;
   const prefix = `apt_live_${randomHex.slice(0, 4)}`;
   const tokenHash = await computeSha256(new TextEncoder().encode(rawToken));
   const tokenId = `tok_${generateTokenHex(8)}`;
-  const now = new Date().toISOString();
 
   await c.env.DB.prepare(`
-    INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, last_used_at, created_at)
-    VALUES (?, ?, ?, ?, ?, NULL, ?)
-  `).bind(tokenId, user.userId, name, prefix, tokenHash, now).run();
+    INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, last_used_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+  `).bind(tokenId, user.userId, name, prefix, tokenHash, expiresAt, now).run();
 
   return c.json(
     {
       id: tokenId,
       name,
       token: rawToken,
+      expiresAt,
       createdAt: now,
       warning: "Copy this token now. It will not be shown again."
     },
@@ -131,6 +185,19 @@ tokensRouter.post("/", async (c) => {
 
 // DELETE /v1/tokens/:id - Revoke an API token
 tokensRouter.delete("/:id", async (c) => {
+  const authMethod = c.get("authMethod");
+  if (authMethod !== "session") {
+    return c.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Revoking API tokens requires an active cookie session."
+        }
+      },
+      403
+    );
+  }
+
   const user = c.get("user");
   const tokenId = c.req.param("id");
 
