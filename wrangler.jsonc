@@ -21,6 +21,20 @@
       "bucket_name": "skillapt-packages"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER_DO",
+        "class_name": "RateLimiterDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RateLimiterDO"]
+    }
+  ],
   "env": {
     "production": {
       "routes": [

@@ -1,4 +1,5 @@
-import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
+import type { D1Database, R2Bucket, DurableObjectNamespace } from "@cloudflare/workers-types";
+import type { RateLimiter } from "./rate-limiter/do";
 
 export interface Env {
   DB: D1Database;
@@ -7,6 +8,8 @@ export interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   CORS_ORIGIN?: string;
+  RATE_LIMITER_DO?: DurableObjectNamespace;
+  RATE_LIMITER?: RateLimiter;
 }
 
 export type PermissionFilesystem = "none" | "read" | "write" | "read-write";
