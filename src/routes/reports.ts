@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { rateLimit } from "../middleware/rate-limit";
+import { rateLimit, getClientIp } from "../middleware/rate-limit";
 import type { Env } from "../types";
 
 export const reportsRouter = new Hono<{ Bindings: Env }>();
@@ -10,13 +10,7 @@ reportsRouter.use(
   rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
     maxRequests: 5,
-    keyGenerator: (c) => {
-      const ip =
-        c.req.header("cf-connecting-ip") ||
-        c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-        "127.0.0.1";
-      return `reports:${ip}`;
-    }
+    keyGenerator: (c) => `reports:${getClientIp(c)}`
   })
 );
 
@@ -97,10 +91,7 @@ reportsRouter.post("/", async (c) => {
     );
   }
 
-  const reporterIp =
-    c.req.header("cf-connecting-ip") ||
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "127.0.0.1";
+  const reporterIp = getClientIp(c);
 
   const reportId = generateReportId();
   const now = new Date().toISOString();

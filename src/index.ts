@@ -102,6 +102,17 @@ import { reportsRouter } from "./routes/reports";
 import { statsRouter } from "./routes/stats";
 import { adminRouter } from "./routes/admin";
 import { dashboardRouter } from "./routes/dashboard";
+import { rateLimit, getClientIp } from "./middleware/rate-limit";
+
+// General API Rate Limit: 300 requests / minute per IP or Token
+app.use(
+  "/v1/*",
+  rateLimit({
+    windowMs: 60 * 1000,
+    maxRequests: 300,
+    keyGenerator: (c) => `general:${getClientIp(c)}`
+  })
+);
 
 // Mount API routes
 app.route("/v1/skills", skillsRouter);
@@ -112,5 +123,7 @@ app.route("/v1/reports", reportsRouter);
 app.route("/v1/stats", statsRouter);
 app.route("/v1/admin", adminRouter);
 app.route("/dashboard", dashboardRouter);
+
+export { RateLimiterDO } from "./rate-limiter/do";
 
 export default app;

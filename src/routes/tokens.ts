@@ -74,8 +74,17 @@ tokensRouter.get("/", async (c) => {
   });
 });
 
+import { rateLimit, getClientIp } from "../middleware/rate-limit";
+
 // POST /v1/tokens - Create a new API token
-tokensRouter.post("/", async (c) => {
+tokensRouter.post(
+  "/",
+  rateLimit({
+    windowMs: 24 * 60 * 60 * 1000, // 1 day
+    maxRequests: 10,
+    keyGenerator: (c) => `token_create:${c.get("user")?.userId || getClientIp(c)}`
+  }),
+  async (c) => {
   const authMethod = c.get("authMethod");
   if (authMethod !== "session") {
     return c.json(

@@ -4,6 +4,7 @@ import { MockD1Database } from "./helpers/mock-d1";
 import { MockR2Bucket } from "./helpers/mock-r2";
 import { buildTarGz } from "./helpers/tar-builder";
 import type { Env } from "../src/types";
+import { InMemoryRateLimiter } from "../src/rate-limiter/do";
 
 describe("Publish Endpoint (POST /v1/skills)", () => {
   let mockDb: MockD1Database;
@@ -63,7 +64,8 @@ Automates tests for AI agents.`;
     env = {
       DB: mockDb.asD1(),
       STORAGE: mockStorage.asR2(),
-      ENVIRONMENT: "test"
+      ENVIRONMENT: "test",
+      RATE_LIMITER: new InMemoryRateLimiter()
     };
   });
 

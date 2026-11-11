@@ -4,6 +4,7 @@ import { MockD1Database } from "../helpers/mock-d1";
 import { MockR2Bucket } from "../helpers/mock-r2";
 import { buildTarGz, createPaxEntry } from "../helpers/tar-builder";
 import type { Env } from "../../src/types";
+import { InMemoryRateLimiter } from "../../src/rate-limiter/do";
 
 describe("Security: Publish Attack Vectors and Invariants", () => {
   let mockDb: MockD1Database;
@@ -45,7 +46,8 @@ describe("Security: Publish Attack Vectors and Invariants", () => {
     env = {
       DB: mockDb.asD1(),
       STORAGE: mockStorage.asR2(),
-      ENVIRONMENT: "test"
+      ENVIRONMENT: "test",
+      RATE_LIMITER: new InMemoryRateLimiter()
     };
   });
 
