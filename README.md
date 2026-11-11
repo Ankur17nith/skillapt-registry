@@ -26,7 +26,12 @@ The branding and product name lives in exactly one constant: [`PRODUCT_NAME`](fi
    - SHA-256 digests are computed upon publish and verified by the CLI during installation against [`skillapt-lock.json`](file:///home/ankurgupta/skillapt-registry/docs/SPEC.md).
 6. **Authentication & Token Security**:
    - Web sessions: GitHub OAuth 2.0 with HTTP-only, secure, SameSite cookies.
-   - CLI operations: Personal access tokens (`apt_live_...`). Raw tokens are shown **only once** upon generation; the database stores exclusively the SHA-256 hash.
+   - Web Dashboard (`/dashboard`): Server-rendered HTML dashboard with strict CSP and CSRF protection for managing personal access tokens.
+   - CLI operations: Personal access tokens (`apt_live_...`). Generating and revoking tokens requires an active web session. Raw tokens are shown **only once** upon generation; the database stores exclusively the SHA-256 hash.
+   - CLI login flow:
+     1. Visit `https://registry.skillapt.dev/dashboard` (or `http://localhost:8787/dashboard` in development).
+     2. Sign in with GitHub.
+     3. Generate a token, copy it, and configure your CLI via `skillapt config set token <token>`.
 
 ---
 

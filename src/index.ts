@@ -101,6 +101,7 @@ import { tokensRouter, meRouter } from "./routes/tokens";
 import { reportsRouter } from "./routes/reports";
 import { statsRouter } from "./routes/stats";
 import { adminRouter } from "./routes/admin";
+import { dashboardRouter } from "./routes/dashboard";
 
 // Mount API routes
 app.route("/v1/skills", skillsRouter);
@@ -110,5 +111,6 @@ app.route("/v1/me", meRouter);
 app.route("/v1/reports", reportsRouter);
 app.route("/v1/stats", statsRouter);
 app.route("/v1/admin", adminRouter);
+app.route("/dashboard", dashboardRouter);
 
 export default app;
