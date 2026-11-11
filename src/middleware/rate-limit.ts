@@ -1,13 +1,12 @@
 import type { Context, Next } from "hono";
 import type { Env } from "../types";
+import {
+  type RateLimiter,
+  InMemoryRateLimiter,
+  DurableObjectRateLimiter
+} from "../rate-limiter/do";
 
-interface RateLimitRecord {
-  count: number;
-  resetAt: number;
-}
-
-// In-memory sliding-window store
-const rateLimitStore = new Map<string, RateLimitRecord>();
+export const defaultInMemoryLimiter = new InMemoryRateLimiter();
 
 export interface RateLimitOptions {
   windowMs: number;
@@ -15,48 +14,56 @@ export interface RateLimitOptions {
   keyGenerator?: (c: Context<{ Bindings: Env }>) => string;
 }
 
+export function getClientIp(c: Context<{ Bindings: Env }>): string {
+  // Use ONLY cf-connecting-ip for client IP (never x-forwarded-for or x-real-ip)
+  return c.req.header("cf-connecting-ip") || "unknown-ip";
+}
+
+function resolveRateLimiter(c: Context<{ Bindings: Env }>): RateLimiter {
+  if (c.env?.RATE_LIMITER) {
+    return c.env.RATE_LIMITER;
+  }
+  if (c.env?.RATE_LIMITER_DO) {
+    return new DurableObjectRateLimiter(c.env.RATE_LIMITER_DO);
+  }
+  return defaultInMemoryLimiter;
+}
+
 export function rateLimit(options: RateLimitOptions) {
   const { windowMs, maxRequests, keyGenerator } = options;
 
   return async (c: Context<{ Bindings: Env }>, next: Next): Promise<Response | void> => {
-    const clientIp =
-      c.req.header("cf-connecting-ip") ||
-      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-      "127.0.0.1";
-
+    const limiter = resolveRateLimiter(c);
+    const clientIp = getClientIp(c);
     const key = keyGenerator ? keyGenerator(c) : `${c.req.path}:${clientIp}`;
-    const now = Date.now();
 
-    let record = rateLimitStore.get(key);
+    const result = await limiter.check(key, windowMs, maxRequests);
 
-    if (!record || now > record.resetAt) {
-      record = {
-        count: 1,
-        resetAt: now + windowMs
-      };
-      rateLimitStore.set(key, record);
-    } else {
-      record.count++;
-    }
+    c.header("X-RateLimit-Limit", maxRequests.toString());
 
-    if (record.count > maxRequests) {
-      const retryAfterSeconds = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
-      c.header("Retry-After", retryAfterSeconds.toString());
+    if (!result.allowed) {
+      c.header("Retry-After", result.retryAfterSeconds.toString());
+      c.header("X-RateLimit-Remaining", "0");
+      c.header("X-RateLimit-Reset", Math.ceil(result.resetAt / 1000).toString());
       return c.json(
         {
           error: {
             code: "RATE_LIMITED",
-            message: "Rate limit exceeded. Please try again later."
+            message: "Rate limit exceeded. Please try again later.",
+            retryAfter: result.retryAfterSeconds
           }
         },
         429
       );
     }
 
+    c.header("X-RateLimit-Remaining", Math.max(0, maxRequests - result.count).toString());
+    c.header("X-RateLimit-Reset", Math.ceil(result.resetAt / 1000).toString());
+
     return next();
   };
 }
 
 export function resetRateLimits(): void {
-  rateLimitStore.clear();
+  defaultInMemoryLimiter.reset();
 }

@@ -13,8 +13,17 @@ function generateRandomHex(length = 32): string {
     .join("");
 }
 
+import { rateLimit, getClientIp } from "../middleware/rate-limit";
+
 // 1. GET /v1/auth/github - Initiate OAuth login
-authRouter.get("/github", (c) => {
+authRouter.get(
+  "/github",
+  rateLimit({
+    windowMs: 10 * 60 * 1000, // 10 minutes
+    maxRequests: 20,
+    keyGenerator: (c) => `oauth:${getClientIp(c)}`
+  }),
+  (c) => {
   const clientId = c.env?.GITHUB_CLIENT_ID;
   if (!clientId) {
     return c.json(

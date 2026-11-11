@@ -5,7 +5,7 @@ import semver from "semver";
 import { inspectAndValidateTarball } from "../validation/tar";
 import { computeSha256 } from "../utils/crypto";
 import { requireAuth } from "../middleware/auth";
-import { rateLimit } from "../middleware/rate-limit";
+import { rateLimit, getClientIp } from "../middleware/rate-limit";
 import { LIMITS } from "../config";
 
 export const skillsRouter = new Hono<{ Bindings: Env }>();
@@ -125,13 +125,7 @@ skillsRouter.get(
   rateLimit({
     windowMs: 60 * 1000,
     maxRequests: 60,
-    keyGenerator: (c) => {
-      const ip =
-        c.req.header("cf-connecting-ip") ||
-        c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-        "127.0.0.1";
-      return `search:${ip}`;
-    }
+    keyGenerator: (c) => `search:${getClientIp(c)}`
   }),
   async (c) => {
   const q = c.req.query("q")?.trim() || "";
@@ -258,7 +252,15 @@ skillsRouter.get(
 });
 
 // 2. POST /v1/skills - Publish a skill package
-skillsRouter.post("/", requireAuth, async (c) => {
+skillsRouter.post(
+  "/",
+  requireAuth,
+  rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    maxRequests: 10,
+    keyGenerator: (c) => `publish:${c.get("user")?.userId || getClientIp(c)}`
+  }),
+  async (c) => {
   const user = c.get("user");
   const contentType = c.req.header("Content-Type") || "";
 
@@ -870,9 +872,16 @@ skillsRouter.get("/:name/:version", async (c) => {
 });
 
 // 4. GET /v1/skills/:name/-/:file - Download tarball
-skillsRouter.get("/:name/-/:file", async (c) => {
-  const skillName = normalizeSkillName(c.req.param("name"));
-  const file = c.req.param("file");
+skillsRouter.get(
+  "/:name/-/:file",
+  rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    maxRequests: 120,
+    keyGenerator: (c) => `download:${getClientIp(c)}`
+  }),
+  async (c) => {
+  const skillName = normalizeSkillName(c.req.param("name") || "");
+  const file = c.req.param("file") || "";
 
   if (!file.endsWith(".tgz")) {
     return c.json(
