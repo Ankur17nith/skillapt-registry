@@ -36,7 +36,10 @@ export class MockR2Bucket {
     return body as R2ObjectBody;
   }
 
-  public async put(key: string, value: ArrayBuffer | Uint8Array | string | ReadableStream, _options?: R2PutOptions): Promise<R2Object> {
+  public async put(key: string, value: ArrayBuffer | Uint8Array | string | ReadableStream, options?: R2PutOptions): Promise<R2Object | null> {
+    if (options?.onlyIf && "etagDoesNotMatch" in options.onlyIf && options.onlyIf.etagDoesNotMatch === "*" && this.store.has(key)) {
+      return null;
+    }
     let bytes: Uint8Array;
     if (typeof value === "string") {
       bytes = new TextEncoder().encode(value);

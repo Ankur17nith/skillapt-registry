@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
+import type { D1Database } from "@cloudflare/workers-types";
 import semver from "semver";
 import { inspectAndValidateTarball } from "../validation/tar";
 import { computeSha256 } from "../utils/crypto";
@@ -50,6 +51,69 @@ interface DependencyDbRow {
 function getTarballUrl(c: { req: { url: string } }, skillName: string, version: string): string {
   const url = new URL(c.req.url);
   return `${url.origin}/v1/skills/${encodeURIComponent(skillName)}/-/${version}.tgz`;
+}
+
+async function readSizeCappedBody(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number
+): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        totalBytes += value.length;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error(
+            `Payload size exceeds maximum allowed upload limit of ${Math.round(maxBytes / (1024 * 1024))} MB.`
+          );
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+export async function recomputeLatestVersion(db: D1Database, skillName: string): Promise<string | null> {
+  const versionsResult = await db.prepare(
+    "SELECT version, yanked FROM skill_versions WHERE skill_name = ?"
+  ).bind(skillName).all<{ version: string; yanked: number }>();
+
+  const activeVersions = (versionsResult.results || [])
+    .filter((v: { yanked: number }) => v.yanked === 0)
+    .map((v: { version: string }) => v.version);
+
+  const stableVersions = activeVersions.filter((v: string) => semver.prerelease(v) === null);
+  stableVersions.sort(semver.rcompare);
+
+  let latest: string | null = null;
+  if (stableVersions.length > 0) {
+    latest = stableVersions[0];
+  } else if (activeVersions.length > 0) {
+    activeVersions.sort(semver.rcompare);
+    latest = activeVersions[0];
+  }
+
+  await db.prepare(
+    "UPDATE skills SET latest_version = ? WHERE name = ?"
+  ).bind(latest, skillName).run();
+
+  return latest;
 }
 
 // 1. GET /v1/skills - List & Search
@@ -195,13 +259,32 @@ skillsRouter.post("/", requireAuth, async (c) => {
   const user = c.get("user");
   const contentType = c.req.header("Content-Type") || "";
 
+  const contentLengthStr = c.req.header("Content-Length");
+  if (contentLengthStr) {
+    const contentLength = parseInt(contentLengthStr, 10);
+    if (!isNaN(contentLength) && contentLength > LIMITS.MAX_TARBALL_SIZE_BYTES) {
+      return c.json(
+        {
+          error: {
+            code: "PAYLOAD_TOO_LARGE",
+            message: `Package archive size exceeds 5 MB limit (${(
+              contentLength /
+              (1024 * 1024)
+            ).toFixed(2)} MB).`
+          }
+        },
+        413
+      );
+    }
+  }
+
   let tarGzBytes: Uint8Array;
 
   try {
     if (contentType.includes("multipart/form-data")) {
       const formData = await c.req.formData();
       const rawFile = formData.get("file") as unknown;
-      if (!rawFile || typeof rawFile === "string" || typeof (rawFile as Blob).arrayBuffer !== "function") {
+      if (!rawFile || typeof rawFile === "string" || typeof (rawFile as Blob).stream !== "function") {
         return c.json(
           {
             error: {
@@ -212,9 +295,26 @@ skillsRouter.post("/", requireAuth, async (c) => {
           400
         );
       }
-      tarGzBytes = new Uint8Array(await (rawFile as Blob).arrayBuffer());
+      tarGzBytes = await readSizeCappedBody(
+        (rawFile as Blob).stream() as ReadableStream<Uint8Array>,
+        LIMITS.MAX_TARBALL_SIZE_BYTES
+      );
     } else if (contentType.includes("application/gzip") || contentType.includes("application/octet-stream")) {
-      tarGzBytes = new Uint8Array(await c.req.arrayBuffer());
+      if (!c.req.raw.body) {
+        return c.json(
+          {
+            error: {
+              code: "BAD_REQUEST",
+              message: "Upload body is empty."
+            }
+          },
+          400
+        );
+      }
+      tarGzBytes = await readSizeCappedBody(
+        c.req.raw.body as ReadableStream<Uint8Array>,
+        LIMITS.MAX_TARBALL_SIZE_BYTES
+      );
     } else {
       return c.json(
         {
@@ -227,14 +327,15 @@ skillsRouter.post("/", requireAuth, async (c) => {
       );
     }
   } catch (err) {
+    const isTooLarge = err instanceof Error && err.message.includes("exceeds maximum allowed upload limit");
     return c.json(
       {
         error: {
-          code: "BAD_REQUEST",
+          code: isTooLarge ? "PAYLOAD_TOO_LARGE" : "BAD_REQUEST",
           message: err instanceof Error ? err.message : "Failed to parse uploaded archive payload."
         }
       },
-      400
+      isTooLarge ? 413 : 400
     );
   }
 
@@ -397,84 +498,158 @@ skillsRouter.post("/", requireAuth, async (c) => {
     }
   }
 
+  // Determine if this newly published version is the highest stable version
+  const publishedIsStable = semver.prerelease(manifest.version) === null;
+  const existingVersions = await c.env.DB.prepare(
+    "SELECT version, yanked FROM skill_versions WHERE skill_name = ?"
+  ).bind(manifest.name).all<{ version: string; yanked: number }>();
+
+  const existingActiveVersions = (existingVersions.results || [])
+    .filter((v) => v.yanked === 0)
+    .map((v) => v.version);
+
+  const currentStableVersions = existingActiveVersions.filter((v) => semver.prerelease(v) === null);
+  currentStableVersions.sort(semver.rcompare);
+  const currentHighestStable = currentStableVersions[0] || null;
+
+  let isNewHighestStable = false;
+  let newLatestVersion: string;
+
+  if (publishedIsStable) {
+    if (!currentHighestStable || semver.gt(manifest.version, currentHighestStable)) {
+      isNewHighestStable = true;
+      newLatestVersion = manifest.version;
+    } else {
+      newLatestVersion = currentHighestStable;
+    }
+  } else {
+    if (currentHighestStable) {
+      newLatestVersion = currentHighestStable;
+    } else {
+      const allActive = [...existingActiveVersions, manifest.version];
+      allActive.sort(semver.rcompare);
+      newLatestVersion = allActive[0];
+    }
+  }
+
   // Compute tarball SHA-256 integrity hash
   const sha256 = await computeSha256(tarGzBytes);
   const tarballPath = `skills/${manifest.name}/${manifest.version}.tgz`;
 
-  // Store in Cloudflare R2
-  await c.env.STORAGE.put(tarballPath, tarGzBytes, {
+  // Store in Cloudflare R2 with create-only semantics (fail on conflict)
+  const r2Result = await c.env.STORAGE.put(tarballPath, tarGzBytes, {
+    onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: {
       contentType: "application/gzip"
     }
   });
 
+  if (!r2Result) {
+    return c.json(
+      {
+        error: {
+          code: "CONFLICT",
+          message: `Version ${manifest.version} of skill '${manifest.name}' has already been published and is immutable.`
+        }
+      },
+      409
+    );
+  }
+
   const now = new Date().toISOString();
+  const statements: any[] = [];
 
   // Create or update skill metadata in D1
   if (!existingSkill) {
-    await c.env.DB.prepare(`
-      INSERT INTO skills (
-        name, owner_id, description, license, repository, category,
-        keywords, compatibility, downloads, verified, readme, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
-    `).bind(
-      manifest.name,
-      user.userId,
-      manifest.description,
-      manifest.license,
-      manifest.repository || null,
-      manifest.category,
-      JSON.stringify(manifest.keywords || []),
-      JSON.stringify(manifest.compatibility),
-      validation.readme || "",
-      now,
-      now
-    ).run();
+    statements.push(
+      c.env.DB.prepare(`
+        INSERT INTO skills (
+          name, owner_id, description, license, repository, category,
+          keywords, compatibility, downloads, verified, readme, latest_version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+      `).bind(
+        manifest.name,
+        user.userId,
+        manifest.description,
+        manifest.license,
+        manifest.repository || null,
+        manifest.category,
+        JSON.stringify(manifest.keywords || []),
+        JSON.stringify(manifest.compatibility),
+        validation.readme || "",
+        newLatestVersion,
+        now,
+        now
+      )
+    );
+  } else if (isNewHighestStable) {
+    statements.push(
+      c.env.DB.prepare(`
+        UPDATE skills
+        SET description = ?, license = ?, repository = ?, category = ?,
+            keywords = ?, compatibility = ?, readme = ?, latest_version = ?, updated_at = ?
+        WHERE name = ?
+      `).bind(
+        manifest.description,
+        manifest.license,
+        manifest.repository || null,
+        manifest.category,
+        JSON.stringify(manifest.keywords || []),
+        JSON.stringify(manifest.compatibility),
+        validation.readme || "",
+        newLatestVersion,
+        now,
+        manifest.name
+      )
+    );
   } else {
-    await c.env.DB.prepare(`
-      UPDATE skills
-      SET description = ?, license = ?, repository = ?, category = ?,
-          keywords = ?, compatibility = ?, readme = ?, updated_at = ?
-      WHERE name = ?
-    `).bind(
-      manifest.description,
-      manifest.license,
-      manifest.repository || null,
-      manifest.category,
-      JSON.stringify(manifest.keywords || []),
-      JSON.stringify(manifest.compatibility),
-      validation.readme || "",
-      now,
-      manifest.name
-    ).run();
+    statements.push(
+      c.env.DB.prepare(`
+        UPDATE skills
+        SET updated_at = ?
+        WHERE name = ?
+      `).bind(now, manifest.name)
+    );
   }
 
   // Insert version record
   const versionId = `${manifest.name}@${manifest.version}`;
-  await c.env.DB.prepare(`
-    INSERT INTO skill_versions (
-      id, skill_name, version, sha256, size, tarball_path,
-      yanked, yank_reason, permissions, published_by, published_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
-  `).bind(
-    versionId,
-    manifest.name,
-    manifest.version,
-    sha256,
-    tarGzBytes.byteLength,
-    tarballPath,
-    JSON.stringify(manifest.permissions),
-    user.userId,
-    now
-  ).run();
+  statements.push(
+    c.env.DB.prepare(`
+      INSERT INTO skill_versions (
+        id, skill_name, version, sha256, size, tarball_path,
+        yanked, yank_reason, permissions, published_by, published_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+    `).bind(
+      versionId,
+      manifest.name,
+      manifest.version,
+      sha256,
+      tarGzBytes.byteLength,
+      tarballPath,
+      JSON.stringify(manifest.permissions),
+      user.userId,
+      now
+    )
+  );
 
   // Insert dependencies
   for (const [depName, depRange] of Object.entries(manifest.dependencies || {})) {
     const depId = `dep_${manifest.name}_${manifest.version}_${depName}`;
-    await c.env.DB.prepare(`
-      INSERT INTO dependencies (id, skill_name, version, dep_name, dep_version_range)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(depId, manifest.name, manifest.version, depName, depRange).run();
+    statements.push(
+      c.env.DB.prepare(`
+        INSERT INTO dependencies (id, skill_name, version, dep_name, dep_version_range)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(depId, manifest.name, manifest.version, depName, depRange)
+    );
+  }
+
+  // Execute single atomic D1 batch; delete R2 on failure to prevent orphans
+  try {
+    await c.env.DB.batch(statements);
+  } catch (err) {
+    await c.env.STORAGE.delete(tarballPath);
+    throw err;
   }
 
   return c.json(
@@ -482,6 +657,7 @@ skillsRouter.post("/", requireAuth, async (c) => {
       name: manifest.name,
       version: manifest.version,
       sha256,
+      integrity: `sha256-${sha256}`,
       size: tarGzBytes.byteLength,
       tarballUrl: getTarballUrl(c, manifest.name, manifest.version),
       message: `Successfully published ${manifest.name}@${manifest.version}`
@@ -556,6 +732,7 @@ skillsRouter.get("/:name", async (c) => {
     versionsMap[v.version] = {
       version: v.version,
       sha256: v.sha256,
+      integrity: `sha256-${v.sha256}`,
       size: v.size,
       tarballUrl: getTarballUrl(c, skillName, v.version),
       dependencies: depsByVersion[v.version] || {},
@@ -648,6 +825,7 @@ skillsRouter.get("/:name/:version", async (c) => {
     name: skillName,
     version: versionRow.version,
     sha256: versionRow.sha256,
+    integrity: `sha256-${versionRow.sha256}`,
     size: versionRow.size,
     tarballUrl: getTarballUrl(c, skillName, versionRow.version),
     dependencies,
@@ -798,6 +976,8 @@ skillsRouter.post("/:name/:version/yank", requireAuth, async (c) => {
     SET yanked = ?, yank_reason = ?
     WHERE skill_name = ? AND version = ?
   `).bind(newYankedStatus, newYankedStatus === 1 ? yankReason : null, skillName, versionParam).run();
+
+  await recomputeLatestVersion(c.env.DB, skillName);
 
   return c.json({
     name: skillName,
