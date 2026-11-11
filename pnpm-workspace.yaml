@@ -1,10 +1,14 @@
 packages:
   - "."
+
 allowBuilds:
   esbuild: true
-  sharp: true
   workerd: true
+
 onlyBuiltDependencies:
   - esbuild
-  - sharp
   - workerd
+
+auditConfig:
+  ignoreGhsas:
+    - GHSA-mrhx-c7xc-m3w5

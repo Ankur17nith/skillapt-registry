@@ -611,6 +611,24 @@ paths:
                     type: array
                     items:
                       type: object
+                      properties:
+                        id:
+                          type: string
+                        skill_name:
+                          type: string
+                        version:
+                          type: string
+                        reason:
+                          type: string
+                        details:
+                          type: string
+                        reporter_hash:
+                          type: string
+                          description: Salted SHA-256 hash of reporter IP address for privacy
+                        status:
+                          type: string
+                        created_at:
+                          type: string
                   total:
                     type: integer
                   limit:
@@ -891,6 +909,27 @@ paths:
                     type: string
                     example: Successfully logged out.
 
+  /dashboard:
+    get:
+      summary: Token Management Dashboard
+      description: Server-rendered HTML dashboard for creating, viewing, and revoking API tokens with strict CSP and CSRF protection.
+      security:
+        - CookieAuth: []
+      responses:
+        '200':
+          description: HTML page rendering user tokens and forms
+          content:
+            text/html:
+              schema:
+                type: string
+        '302':
+          description: Redirects to GitHub OAuth login if session cookie is missing or invalid
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/auth/github
+
   /reports:
     post:
       summary: Submit a skill report
@@ -983,11 +1022,7 @@ components:
       in: cookie
       name: skillapt_session
       description: HttpOnly session cookie issued after GitHub OAuth login
-    AdminTokenAuth:
-      type: apiKey
-      in: header
-      name: X-Admin-Token
-      description: Administrative bearer secret for takedowns and platform governance
+
 
   schemas:
     HealthStatus:

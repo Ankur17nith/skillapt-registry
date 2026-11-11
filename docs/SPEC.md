@@ -13,7 +13,7 @@
 
 An **agent skill** is a modular package that teaches an AI agent (such as Claude, Cursor, Codex, Antigravity, or custom LLM frameworks) how to perform specialized tasks. Skills provide instructions, prompt templates, schemas, and helper scripts that agents consume to accomplish workflows like document summarization, database queries, code refactoring, or security auditing.
 
-`skillapt` is **completely independent of npm**. It does not use npm packages, npm registries, `node_modules`, or npm lifecycle scripts. It provides a lightweight, sandboxed distribution format tailored for modern agentic AI architectures.
+`skillapt` provides a lightweight, sandboxed distribution format tailored for modern agentic AI architectures without relying on npm runtimes or lifecycle execution scripts.
 
 ### Core Architecture Principles
 1. **Zero Code Execution on Registry**: The registry never executes, builds, runs, or evaluates user code. Packages are inspected statically and served as static tarballs.
@@ -366,27 +366,37 @@ sequenceDiagram
 ```
 
 ### 9.1 Rules
-- **Conditional R2 Put**: Before writing to R2, verify that the key `skills/<name>/<version>.tgz` does not exist.
-- **Rollback on Error**: If any subsequent D1 database query fails, the newly uploaded R2 object is deleted immediately in a `try...catch` rollback block.
+- **Conditional R2 Put**: Before committing to D1, the tarball is uploaded to R2 with create-only semantics using `onlyIf: { etagDoesNotMatch: "*" }`. If an object with that key already exists, R2 returns a precondition failure and the registry returns `409 CONFLICT`.
+- **Atomic D1 Batch**: Metadata is inserted using a single atomic D1 `batch()` transaction containing the `skills` upsert, `skill_versions` record, and all `skill_dependencies` records.
+- **Rollback on Error**: If the D1 batch transaction fails, the newly uploaded R2 object is deleted immediately in a rollback block before returning an error.
 - **Engine Constraint**: `UNIQUE(skill_name, version)` on table `skill_versions` prevents concurrent race conditions.
+- **Latest Version Tracking**: The `skills.latest_version` column is maintained atomically to point to the highest stable, active version (excluding pre-releases and yanked/removed versions).
 
 ---
 
 ## 10. Downloads Counting & CDN Caching
 
-Download metrics are **approximate counts** designed to give the community popularity signals without crippling database performance.
+Download metrics are deduplicated daily per IP hash to provide accurate popularity signals without database lock contention.
 
 ### 10.1 Caching Architecture
-- Download responses set:
+- Active version download responses set:
   ```http
   Cache-Control: public, max-age=31536000, immutable
   ETag: "<sha256>"
   ```
-- Tarballs are cached heavily at Cloudflare's edge network worldwide.
+- Yanked version download responses set:
+  ```http
+  Cache-Control: public, max-age=300
+  ETag: "<sha256>"
+  ```
+- Removed versions return `410 Gone` with `Cache-Control: no-store`.
+- Conditional requests: If the request includes `If-None-Match` matching the version's checksum, the registry immediately returns `304 Not Modified`.
+- Tarball bodies are streamed directly from R2 object storage to the client.
 
 ### 10.2 Approximate Counting & Deduplication
-- **Deduplication Window**: A download is counted at most **once per 24 hours per unique `(Client IP, Package Name, Version)` tuple**.
-- **Counting Pipeline**: Downloads are buffered via Cloudflare Rate Limiting counters or background analytics beacons rather than running immediate `UPDATE` queries on D1 on every request. This prevents loop inflation attacks and eliminates database lock contention.
+- **Deduplication Table**: A download is counted at most **once per 24 hours per unique `(skill, version, ip_hash, day)` tuple** in the `download_dedupe` table.
+- **IP Hashing**: `ip_hash` is computed as `SHA-256(Client IP + salt)`. Raw IP addresses are never persisted.
+- **Filter Incomplete Requests**: `HEAD` requests and HTTP `Range` requests do not increment download counters.
 
 ---
 
@@ -398,41 +408,68 @@ Web sessions created via GitHub OAuth utilize hardened cookie security:
   - `Name`: `skillapt_session`
   - `Domain`: `.<our-domain>` (e.g. `.skillapt.dev` in production)
   - `HttpOnly`: `true` (inaccessible to clientside scripts)
-  - `Secure`: `true` (enforced on HTTPS)
+  - `Secure`: `true` (enforced in production)
   - `SameSite`: `Lax`
   - `Path`: `/`
   - `Max-Age`: 30 days (2,592,000 seconds)
+- **Hashed Session Storage**: The `sessions` table stores `SHA-256(session_id)`. Plaintext session tokens are never saved in the database.
+- **Session Rotation & Expiration**: Existing sessions are rotated upon authentication, and expired sessions are deleted during authentication lookups.
 
 ### 11.2 CSRF Protection on Mutating Requests
 Because browsers automatically attach session cookies to requests:
-- **Origin Header Verification**: Every state-changing request (`POST`, `PUT`, `DELETE`, `PATCH`) authenticated via session cookie **MUST** validate that the request `Origin` or `Referer` matches the configured site origin (e.g. `https://skillapt.dev`).
-- If the `Origin` header is missing or does not match an allowed domain, the request is rejected with `403 FORBIDDEN` (`CSRF_VIOLATION`).
+- **Origin Header Verification**: Every state-changing request (`POST`, `PUT`, `DELETE`, `PATCH`) authenticated via session cookie **MUST** validate that the request `Origin` (or `Referer`) exactly matches the configured allowed origins.
+- If the `Origin` header does not match an allowed domain, the request is rejected with `403 FORBIDDEN` (`CSRF_VIOLATION`).
 - API Bearer tokens (`apt_live_...`) are exempt from CSRF Origin checks because browsers do not attach Bearer headers automatically.
 
 ### 11.3 Strict CORS Policy
-- Allowed origins are restricted strictly to configured web domains (e.g. `https://skillapt.dev`, `http://localhost:3000`).
-- **Never Wildcard with Credentials**: The header `Access-Control-Allow-Origin: *` is **STRICTLY FORBIDDEN** on any route returning `Access-Control-Allow-Credentials: true`.
-- If an unapproved origin makes a credentialed cross-origin request, CORS preflight fails.
+- Allowed origins are restricted strictly to configured web domains (e.g. `https://skillapt.dev`).
+- **Never Wildcard with Credentials**: The header `Access-Control-Allow-Origin: *` is strictly forbidden when credentials are enabled.
+- Localhost origins are forbidden when `ENVIRONMENT=production`.
+- Responses include `Vary: Origin`.
 
 ### 11.4 API Token Security
 - Format: `apt_live_<32-random-hex-chars>`.
 - Storage: SHA-256 hash digest only. Raw tokens are displayed once upon creation and never retained on the server.
+- **Session-Gated Token Minting**: API tokens can only be created or revoked from an authenticated browser session (not via another API token).
+- **Caps & Expiration**: Maximum 20 active tokens per user; optional expiration defaulting to 90 days (`expires_at`).
+
+### 11.5 Web Token Dashboard
+- `GET /dashboard` renders a minimal, server-rendered HTML interface.
+- Governed by a strict Content Security Policy (`default-src 'self'; script-src 'none'; style-src 'unsafe-inline'`).
+- Provides CSRF-protected forms to create new API tokens, copy newly generated tokens, view active tokens, revoke tokens, and log out.
 
 ---
 
 ## 12. Rate Limiting Architecture
 
-Rate limiting is enforced globally using the **Cloudflare Rate Limiting binding** (or a Durable Object counter), replacing in-memory Worker maps.
+Rate limiting is enforced globally using Cloudflare **Durable Objects** (`RateLimiterDO`) running an in-memory sliding window algorithm.
 
 | Scope / Action | Identifier | Rate Limit | Action on Breach |
 | :--- | :--- | :--- | :--- |
-| **Tarball Downloads** | Client IP | 120 downloads / minute | `429 Too Many Requests` + `Retry-After` |
-| **Package Discovery / Search** | Client IP | 60 requests / minute | `429 Too Many Requests` |
-| **Publishing (`POST /v1/skills`)** | Authenticated User | 10 publishes / hour | `429 Too Many Requests` |
-| **GitHub OAuth Flow** | Client IP | 20 logins / 10 minutes | `429 Too Many Requests` |
-| **Token Creation (`POST /v1/tokens`)**| Authenticated User | 10 creations / day | `429 Too Many Requests` |
-| **Abuse Reports (`POST /v1/reports`)** | Client IP | 5 reports / hour | `429 Too Many Requests` |
-| **General API Requests** | API Token / IP | 300 requests / minute | `429 Too Many Requests` |
+| **Tarball Downloads** | Client IP (`cf-connecting-ip`) | 120 downloads / minute | `429 Too Many Requests` + `Retry-After` |
+| **Package Discovery / Search** | Client IP (`cf-connecting-ip`) | 60 requests / minute | `429 Too Many Requests` |
+| **Publishing (`POST /v1/skills`)** | Authenticated User ID | 10 publishes / hour | `429 Too Many Requests` |
+| **GitHub OAuth Flow** | Client IP (`cf-connecting-ip`) | 20 logins / 10 minutes | `429 Too Many Requests` |
+| **Token Creation (`POST /v1/tokens`)**| Authenticated User ID | 10 creations / day | `429 Too Many Requests` |
+| **Abuse Reports (`POST /v1/reports`)** | Client IP (`cf-connecting-ip`) | 5 reports / hour | `429 Too Many Requests` |
+| **General API Requests** | API Token / Client IP | 300 requests / minute | `429 Too Many Requests` |
+
+### 12.1 Standard 429 Response
+Rate limit breaches return standard HTTP 429 responses with RFC-compliant headers:
+- `Retry-After`: Seconds until the limit resets
+- `X-RateLimit-Limit`: Maximum requests permitted in the window
+- `X-RateLimit-Remaining`: Remaining request quota (0 when rate limited)
+- `X-RateLimit-Reset`: Unix timestamp when quota resets
+- Response body:
+  ```json
+  {
+    "error": {
+      "code": "RATE_LIMITED",
+      "message": "Too many requests. Please wait 60 seconds before retrying.",
+      "retryAfter": 60
+    }
+  }
+  ```
 
 ---
 
@@ -461,24 +498,29 @@ All endpoints are hosted under `/v1`.
 
 ### 14.2 Publishing & Version Management
 - `POST /v1/skills`: Publish package (`multipart/form-data` with `file`). Atomic R2 upload with rollback.
-- `POST /v1/skills/:name/:version/yank`: Toggle `yanked` status (owner only).
+- `POST /v1/skills/:name/:version/yank`: Idempotent yank of a published version (sets `yanked = true`).
+- `DELETE /v1/skills/:name/:version/yank`: Idempotent un-yank of a published version (sets `yanked = false`).
 
 ### 14.3 Admin & Governance
-- `POST /v1/admin/skills/:name/:version/takedown`: Mark version as `removed` with report linkage.
-- `POST /v1/admin/skills/:name/:version/restore`: Restore version from `removed` to `active`.
+- `POST /v1/admin/skills/:name/:version/takedown`: Mark version as `removed` with report linkage (admin role only).
+- `POST /v1/admin/skills/:name/:version/restore`: Restore version from `removed` to `active`/`yanked` (admin role only).
+- `GET /v1/admin/reports`: List abuse reports with pagination and status filters (admin role only).
+- `POST /v1/admin/reports/:id/resolve`: Mark abuse report as resolved (admin role only).
 
 ### 14.4 User & Token Management
 - `GET /v1/me`: Profile of current user.
-- `GET /v1/tokens`: List user's active API tokens.
-- `POST /v1/tokens`: Create personal API token (`apt_live_...`).
-- `DELETE /v1/tokens/:id`: Revoke an API token.
+- `GET /v1/tokens`: List user's active API tokens (session auth required).
+- `POST /v1/tokens`: Create personal API token (`apt_live_...`, session auth required).
+- `DELETE /v1/tokens/:id`: Revoke an API token (session auth required).
+- `GET /dashboard`: Server-rendered HTML dashboard with CSP and CSRF protection for managing personal API tokens.
 
 ### 14.5 Authentication
 - `GET /v1/auth/github`: Initiate OAuth login.
-- `GET /v1/auth/github/callback`: OAuth callback, cookie issuance.
+- `GET /v1/auth/github/callback`: OAuth callback, claims user's GitHub scope, and rotates session cookie.
 - `POST /v1/auth/logout`: Destroy session and clear cookie.
 
 ### 14.6 Platform
 - `GET /health` & `GET /v1/health`: System health and version checks.
-- `POST /v1/reports`: Submit package abuse report.
+- `POST /v1/reports`: Submit package abuse report (records `reporter_hash` using salted SHA-256 for privacy).
 - `GET /v1/stats`: Homepage metrics.
+
