@@ -76,11 +76,18 @@ export class MockD1Database {
   }
 
   public async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-    const results: D1Result<T>[] = [];
-    for (const stmt of statements) {
-      results.push(await stmt.run<T>());
+    this.db.exec("BEGIN TRANSACTION");
+    try {
+      const results: D1Result<T>[] = [];
+      for (const stmt of statements) {
+        results.push(await stmt.run<T>());
+      }
+      this.db.exec("COMMIT");
+      return results;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
     }
-    return results;
   }
 
   public async exec(query: string): Promise<D1Result<unknown>> {
