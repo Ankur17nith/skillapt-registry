@@ -98,16 +98,18 @@ The registry inspects all entries in the tarball. Only safe, text-based, templat
 | Category | Allowed File Extensions |
 | :--- | :--- |
 | **Documentation & Prompts** | `.md`, `.txt`, `.prompt`, `.rst` |
-| **Data & Configuration** | `.json`, `.yaml`, `.yml`, `.toml`, `.csv`, `.tsv` |
+| **Data & Configuration** | `.json`, `.yaml`, `.yml`, `.toml`, `.csv`, `.tsv`, `.xml`, `.xsd` |
+| **Web Assets** | `.html`, `.css`, `.svg` |
 | **Templates** | `.jinja`, `.jinja2`, `.mustache`, `.hbs`, `.template` |
 | **Common Scripts** | `.js`, `.mjs`, `.cjs`, `.ts`, `.py`, `.sh`, `.bash`, `.zsh`, `.lua`, `.rb` |
 | **Allowed Special Dotfiles** | `.gitignore`, `.editorconfig` |
+| **Allowed Extensionless Files** | `LICENSE`, `NOTICE`, `README`, `CHANGELOG`, `Makefile` |
 
 **Strictly Prohibited & Rejected**:
 - **Binary Executables & Libraries**: `.exe`, `.dll`, `.so`, `.dylib`, `.bin`, `.elf`, `.macho`, `.com`.
-- **Content Signature Checking**: The registry inspects the initial 512 bytes of every file. Any file matching ELF (`0x7F 0x45 0x4C 0x46`), Mach-O (`0xFE 0xED 0xFA 0xCE/CF` or `0xCF 0xFA 0xED 0xFE`), Windows PE (`MZ` / `0x4D 0x5A`), or Java class magic bytes is **rejected immediately**, even if disguised with a `.py` or `.txt` extension.
+- **Content Signature Checking**: The registry inspects the initial 512 bytes of every file. Any file matching ELF (`0x7F 0x45 0x4C 0x46`), Mach-O (`0xFE 0xED 0xFA 0xCE/CF` or `0xCF 0xFA 0xED 0xFE` or universal fat binary `0xCA 0xFE 0xBA 0xBE`), Windows PE (`MZ` / `0x4D 0x5A`), Java class, or WebAssembly (`\0asm` / `0x00 0x61 0x73 0x6D`) magic bytes is **rejected immediately**, even if disguised with a `.py` or `.txt` extension.
 - **Nested Archives**: `.tar`, `.gz`, `.zip`, `.rar`, `.7z`, `.bz2`.
-- **Hidden Files**: Any file or directory starting with `.` other than `.gitignore` and `.editorconfig`.
+- **Hidden Files & Directories**: Any file or directory with any path segment starting with `.` other than `.gitignore` and `.editorconfig`.
 
 ### 3.4 Archive Safety Constraints & Streaming Limits
 

@@ -171,6 +171,18 @@ authRouter.get("/github/callback", async (c) => {
     ).run();
   }
 
+  // Claim scope ownership for user's lowercased GitHub handle
+  const handleLower = profile.login.toLowerCase();
+  const existingScope = await c.env.DB.prepare(
+    "SELECT scope, github_id FROM scopes WHERE scope = ?"
+  ).bind(handleLower).first<{ scope: string; github_id: number }>();
+
+  if (!existingScope) {
+    await c.env.DB.prepare(
+      "INSERT INTO scopes (scope, owner_id, github_id, created_at) VALUES (?, ?, ?, ?)"
+    ).bind(handleLower, userId, profile.id, now).run();
+  }
+
   // Create session
   const sessionId = `ses_${generateRandomHex(24)}`;
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days

@@ -23,7 +23,13 @@ describe("Package Validation & Safe Tarball Inspection", () => {
     }
   };
 
-  const validSkillMd = "# PDF Summarizer\n\nTeaches agents how to extract text from PDF files.";
+  const validSkillMd = `---
+name: pdf-summarizer
+description: Teaches agents how to extract text from PDF files.
+---
+# PDF Summarizer
+
+Teaches agents how to extract text from PDF files.`;
 
   describe("Zod Manifest Validation", () => {
     it("accepts a fully compliant skill manifest", () => {

@@ -3,8 +3,9 @@ import zlib from "node:zlib";
 export interface TarFileEntry {
   path: string;
   content: string | Uint8Array;
-  typeFlag?: string; // '0' = file, '2' = symlink, '5' = dir
+  typeFlag?: string; // '0' = file, '2' = symlink, '5' = dir, 'x' = pax
   linkName?: string;
+  corruptChecksum?: boolean;
 }
 
 export function createTarBlock(entry: TarFileEntry): Uint8Array {
@@ -55,10 +56,31 @@ export function createTarBlock(entry: TarFileEntry): Uint8Array {
     chksum += block[i];
   }
 
+  if (entry.corruptChecksum) {
+    chksum ^= 0xff;
+  }
+
   const chksumOctal = chksum.toString(8).padStart(6, "0") + "\0 ";
   block.set(encoder.encode(chksumOctal), 148);
 
   return block;
+}
+
+export function createPaxEntry(records: Record<string, string>): TarFileEntry {
+  let content = "";
+  for (const [k, v] of Object.entries(records)) {
+    const base = ` ${k}=${v}\n`;
+    let len = base.length + 2;
+    while (`${len}${base}`.length !== len) {
+      len = `${len}${base}`.length;
+    }
+    content += `${len}${base}`;
+  }
+  return {
+    path: "PaxHeaders/pax",
+    content,
+    typeFlag: "x"
+  };
 }
 
 export function buildTarGz(entries: TarFileEntry[]): Uint8Array {

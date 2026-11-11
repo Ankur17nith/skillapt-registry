@@ -270,7 +270,29 @@ skillsRouter.post("/", requireAuth, async (c) => {
 
   const manifest = validation.manifest;
 
-  // Check package ownership
+  // 1. Check scope ownership for scoped packages
+  if (manifest.name.startsWith("@")) {
+    const [scopePart] = manifest.name.slice(1).split("/");
+    const scopeLower = scopePart.toLowerCase();
+
+    const scopeRow = await c.env.DB.prepare(
+      "SELECT scope, github_id, owner_id FROM scopes WHERE scope = ?"
+    ).bind(scopeLower).first<{ scope: string; github_id: number; owner_id: string }>();
+
+    if (!scopeRow || scopeRow.github_id !== user.githubId) {
+      return c.json(
+        {
+          error: {
+            code: "FORBIDDEN",
+            message: `You do not own the '@${scopeLower}' scope. Only the scope owner can publish packages under this scope.`
+          }
+        },
+        403
+      );
+    }
+  }
+
+  // 2. Check package ownership (unscoped packages are first-come)
   const existingSkill = await c.env.DB.prepare(
     "SELECT owner_id FROM skills WHERE name = ?"
   ).bind(manifest.name).first<{ owner_id: string }>();
@@ -289,7 +311,7 @@ skillsRouter.post("/", requireAuth, async (c) => {
     }
   }
 
-  // Check version immutability
+  // 3. Check version immutability
   const existingVersion = await c.env.DB.prepare(
     "SELECT id FROM skill_versions WHERE skill_name = ? AND version = ?"
   ).bind(manifest.name, manifest.version).first<{ id: string }>();
@@ -304,6 +326,75 @@ skillsRouter.post("/", requireAuth, async (c) => {
       },
       409
     );
+  }
+
+  // 4. Validate dependency existence, version ranges, depth, and cycles
+  const declaredDeps = manifest.dependencies || {};
+  const depEntries = Object.entries(declaredDeps);
+
+  if (depEntries.length > 0) {
+    async function checkDependencyGraph(
+      depName: string,
+      depRange: string,
+      visitedChain: string[],
+      currentDepth: number
+    ): Promise<string | null> {
+      if (currentDepth > LIMITS.MAX_DEPENDENCY_DEPTH) {
+        return `Dependency depth exceeds maximum of ${LIMITS.MAX_DEPENDENCY_DEPTH} (path: ${visitedChain.join(" -> ")} -> ${depName})`;
+      }
+
+      if (visitedChain.includes(depName)) {
+        return `Dependency cycle detected: ${visitedChain.join(" -> ")} -> ${depName}`;
+      }
+
+      const rows = await c.env.DB.prepare(`
+        SELECT v.version, v.yanked
+        FROM skill_versions v
+        WHERE v.skill_name = ?
+      `).bind(depName).all<{ version: string; yanked: number }>();
+
+      const versions = rows.results || [];
+      const satisfyingVersion = versions.find((v) => {
+        return v.yanked === 0 && semver.satisfies(v.version, depRange);
+      });
+
+      if (!satisfyingVersion) {
+        return `Dependency '${depName}' with range '${depRange}' cannot be satisfied by any active published version.`;
+      }
+
+      const transitiveDeps = await c.env.DB.prepare(`
+        SELECT dep_name, dep_version_range
+        FROM dependencies
+        WHERE skill_name = ? AND version = ?
+      `).bind(depName, satisfyingVersion.version).all<{ dep_name: string; dep_version_range: string }>();
+
+      for (const tDep of transitiveDeps.results || []) {
+        const err = await checkDependencyGraph(
+          tDep.dep_name,
+          tDep.dep_version_range,
+          [...visitedChain, depName],
+          currentDepth + 1
+        );
+        if (err) return err;
+      }
+
+      return null;
+    }
+
+    for (const [depName, depRange] of depEntries) {
+      const depError = await checkDependencyGraph(depName, depRange, [manifest.name], 1);
+      if (depError) {
+        return c.json(
+          {
+            error: {
+              code: "INVALID_DEPENDENCY",
+              message: depError
+            }
+          },
+          400
+        );
+      }
+    }
   }
 
   // Compute tarball SHA-256 integrity hash
