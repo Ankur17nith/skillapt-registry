@@ -4,6 +4,7 @@ import { MockD1Database } from "./helpers/mock-d1";
 import { MockR2Bucket } from "./helpers/mock-r2";
 import { buildTarGz } from "./helpers/tar-builder";
 import type { Env } from "../src/types";
+import { InMemoryRateLimiter } from "../src/rate-limiter/do";
 
 describe("Branch 3: Publish Atomicity, Limits, and Latest Version Maintenance", () => {
   let mockDb: MockD1Database;
@@ -21,7 +22,8 @@ describe("Branch 3: Publish Atomicity, Limits, and Latest Version Maintenance", 
     env = {
       DB: mockDb.asD1(),
       STORAGE: mockStorage.asR2(),
-      ENVIRONMENT: "test"
+      ENVIRONMENT: "test",
+      RATE_LIMITER: new InMemoryRateLimiter()
     };
   });
 
