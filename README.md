@@ -184,7 +184,7 @@ curl -s "http://localhost:8787/v1/skills/pdf-summarizer" | jq .
 ### 3. Generate a CLI Token (Authenticated)
 ```bash
 curl -s -X POST "http://localhost:8787/v1/tokens" \
-  -H "Authorization: Bearer apt_live_testtoken1234567890abcdef" \
+  -H "Authorization: Bearer <YOUR_API_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-workstation"}' | jq .
 ```
@@ -192,7 +192,7 @@ curl -s -X POST "http://localhost:8787/v1/tokens" \
 ### 4. Publish a Skill Package
 ```bash
 curl -X POST "http://localhost:8787/v1/skills" \
-  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -H "Authorization: Bearer <YOUR_API_TOKEN>" \
   -F "file=@my-agent-skill.tar.gz"
 ```
 
