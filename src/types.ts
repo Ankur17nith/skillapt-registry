@@ -37,6 +37,7 @@ export interface UserSession {
   name: string;
   email: string | null;
   avatarUrl: string;
+  role?: string;
 }
 
 export interface AppErrorResponse {
