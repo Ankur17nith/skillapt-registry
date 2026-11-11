@@ -43,7 +43,7 @@ describe("Tarball Storage, Download, and SHA-256 Checksums", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/gzip");
     expect(res.headers.get("Content-Disposition")).toContain("pdf-summarizer-1.2.0.tgz");
-    expect(res.headers.get("ETag")).toBe('"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"');
+    expect(res.headers.get("ETag")).toBe('"0f6fca4a57687bd3e4fb4b54d4c25eff32239a5a869595b2189bb5df3ec664a1"');
     expect(res.headers.get("Cache-Control")).toContain("immutable");
 
     const bytes = await res.arrayBuffer();

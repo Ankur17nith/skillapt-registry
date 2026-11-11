@@ -99,7 +99,7 @@ describe("Branch 8: Search, Download, and Abuse Reports Hardening", () => {
 
   describe("2. Download: Streaming, ETag / If-None-Match, Cache-Control, and Deduplication", () => {
     it("handles If-None-Match matching ETag / sha256 and returns 304 Not Modified", async () => {
-      const sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+      const sha = "0f6fca4a57687bd3e4fb4b54d4c25eff32239a5a869595b2189bb5df3ec664a1";
 
       // Match quoted ETag
       const res1 = await app.request("/v1/skills/pdf-summarizer/-/1.2.0.tgz", {
