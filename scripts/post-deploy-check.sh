@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REGISTRY_URL="${REGISTRY_URL:-https://registry.skillapt.dev}"
+if [ -z "${REGISTRY_URL:-}" ]; then
+  echo "Usage: REGISTRY_URL=https://skillapt-registry.<subdomain>.workers.dev [REGISTRY_TOKEN=...] bash scripts/post-deploy-check.sh" >&2
+  exit 2
+fi
 REGISTRY_URL="${REGISTRY_URL%/}" # Strip trailing slash
 
 echo "====================================================="
