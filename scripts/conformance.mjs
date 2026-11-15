@@ -96,13 +96,30 @@ async function main() {
   fs.mkdirSync(tmpConfig, { recursive: true });
   fs.mkdirSync(tmpWorkspace, { recursive: true });
 
-  const port = await getFreePort();
-  const baseUrl = `http://127.0.0.1:${port}/v1`;
+  const isRemote = Boolean(process.env.REGISTRY_URL);
+  let baseUrl;
+  let devProcess = null;
+  let port = null;
+
+  let alexToken = process.env.REGISTRY_TOKEN || "apt_live_alexconformance1234567890abcdef";
+  let adminToken = process.env.ADMIN_TOKEN || "apt_live_adminconformance1234567890abcdef";
+  let sarahToken = "apt_live_sarahconformance1234567890abcdef";
+
+  if (isRemote) {
+    const rawUrl = process.env.REGISTRY_URL.replace(/\/+$/, "");
+    baseUrl = rawUrl.endsWith("/v1") ? rawUrl : `${rawUrl}/v1`;
+    console.log(`Registry Mode: REMOTE (${baseUrl})`);
+    if (process.env.REGISTRY_TOKEN) console.log("Using REGISTRY_TOKEN from environment.");
+    if (process.env.ADMIN_TOKEN) console.log("Using ADMIN_TOKEN from environment.");
+  } else {
+    port = await getFreePort();
+    baseUrl = `http://127.0.0.1:${port}/v1`;
+    console.log(`Registry Mode: LOCAL workerd (${baseUrl})`);
+  }
 
   console.log(`Temp Directory: ${tmpRoot}`);
   console.log(`Registry URL:   ${baseUrl}`);
 
-  let devProcess = null;
   const cleanup = () => {
     if (devProcess) {
       console.log(`Stopping wrangler process (PID ${devProcess.pid})...`);
@@ -119,63 +136,64 @@ async function main() {
   process.on("SIGTERM", () => { cleanup(); process.exit(1); });
 
   try {
-    // 1. D1 Migrations
-    console.log("\n[1/6] Applying D1 migrations to local persistence...");
-    execSync(`npx wrangler d1 migrations apply DB --local --persist-to "${tmpPersist}"`, {
-      env: { ...process.env, CI: "true" },
-      stdio: "pipe"
-    });
-    console.log("   D1 migrations applied.");
+    if (!isRemote) {
+      // 1. D1 Migrations
+      console.log("\n[1/6] Applying D1 migrations to local persistence...");
+      execSync(`npx wrangler d1 migrations apply DB --local --persist-to "${tmpPersist}"`, {
+        env: { ...process.env, CI: "true" },
+        stdio: "pipe"
+      });
+      console.log("   D1 migrations applied.");
 
-    // 2. Seed Users and Tokens
-    console.log("[2/6] Seeding test users, scopes, and API tokens...");
-    const alexToken = "apt_live_alexconformance1234567890abcdef";
-    const alexHash = sha256Hex(alexToken);
-    const adminToken = "apt_live_adminconformance1234567890abcdef";
-    const adminHash = sha256Hex(adminToken);
-    const sarahToken = "apt_live_sarahconformance1234567890abcdef";
-    const sarahHash = sha256Hex(sarahToken);
-    const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 90 * 86400 * 1000).toISOString();
+      // 2. Seed Users and Tokens
+      console.log("[2/6] Seeding test users, scopes, and API tokens...");
+      const alexHash = sha256Hex(alexToken);
+      const adminHash = sha256Hex(adminToken);
+      const sarahHash = sha256Hex(sarahToken);
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + 90 * 86400 * 1000).toISOString();
 
-    const seedSql = `
-      INSERT OR REPLACE INTO users (id, github_id, handle, name, email, avatar_url, role, created_at, updated_at) VALUES
-      ('usr_alexdev', 10101, 'alexdev', 'Alex Rivers', 'alex@example.com', '', 'user', '${now}', '${now}'),
-      ('usr_sarahai', 20202, 'sarahai', 'Sarah Chen', 'sarah@example.com', '', 'user', '${now}', '${now}'),
-      ('usr_admin', 99999, 'adminuser', 'Admin User', 'admin@example.com', '', 'admin', '${now}', '${now}');
+      const seedSql = `
+        INSERT OR REPLACE INTO users (id, github_id, handle, name, email, avatar_url, role, created_at, updated_at) VALUES
+        ('usr_alexdev', 10101, 'alexdev', 'Alex Rivers', 'alex@example.com', '', 'user', '${now}', '${now}'),
+        ('usr_sarahai', 20202, 'sarahai', 'Sarah Chen', 'sarah@example.com', '', 'user', '${now}', '${now}'),
+        ('usr_admin', 99999, 'adminuser', 'Admin User', 'admin@example.com', '', 'admin', '${now}', '${now}');
 
-      INSERT OR REPLACE INTO scopes (scope, owner_id, github_id, created_at) VALUES
-      ('alexdev', 'usr_alexdev', 10101, '${now}'),
-      ('sarahai', 'usr_sarahai', 20202, '${now}');
+        INSERT OR REPLACE INTO scopes (scope, owner_id, github_id, created_at) VALUES
+        ('alexdev', 'usr_alexdev', 10101, '${now}'),
+        ('sarahai', 'usr_sarahai', 20202, '${now}');
 
-      INSERT OR REPLACE INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, created_at) VALUES
-      ('tok_alex', 'usr_alexdev', 'alex-conformance', 'apt_live_alex', '${alexHash}', '${expiresAt}', '${now}'),
-      ('tok_sarah', 'usr_sarahai', 'sarah-conformance', 'apt_live_sara', '${sarahHash}', '${expiresAt}', '${now}'),
-      ('tok_admin', 'usr_admin', 'admin-conformance', 'apt_live_admi', '${adminHash}', '${expiresAt}', '${now}');
-    `;
+        INSERT OR REPLACE INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, created_at) VALUES
+        ('tok_alex', 'usr_alexdev', 'alex-conformance', 'apt_live_alex', '${alexHash}', '${expiresAt}', '${now}'),
+        ('tok_sarah', 'usr_sarahai', 'sarah-conformance', 'apt_live_sara', '${sarahHash}', '${expiresAt}', '${now}'),
+        ('tok_admin', 'usr_admin', 'admin-conformance', 'apt_live_admi', '${adminHash}', '${expiresAt}', '${now}');
+      `;
 
-    const seedPath = path.join(tmpRoot, "seed.sql");
-    fs.writeFileSync(seedPath, seedSql, "utf8");
-    execSync(`npx wrangler d1 execute DB --local --persist-to "${tmpPersist}" --file="${seedPath}"`, {
-      env: { ...process.env, CI: "true" },
-      stdio: "pipe"
-    });
-    console.log("   Seed fixtures ready.");
+      const seedPath = path.join(tmpRoot, "seed.sql");
+      fs.writeFileSync(seedPath, seedSql, "utf8");
+      execSync(`npx wrangler d1 execute DB --local --persist-to "${tmpPersist}" --file="${seedPath}"`, {
+        env: { ...process.env, CI: "true" },
+        stdio: "pipe"
+      });
+      console.log("   Seed fixtures ready.");
 
-    // 3. Start local registry
-    console.log("[3/6] Starting Cloudflare Worker registry on workerd...");
-    const devLog = path.join(tmpRoot, "wrangler.log");
-    const logFd = fs.openSync(devLog, "w");
+      // 3. Start local registry
+      console.log("[3/6] Starting Cloudflare Worker registry on workerd...");
+      const devLog = path.join(tmpRoot, "wrangler.log");
+      const logFd = fs.openSync(devLog, "w");
 
-    devProcess = spawn("npx", [
-      "wrangler", "dev",
-      "--local",
-      "--port", port.toString(),
-      "--ip", "127.0.0.1",
-      "--persist-to", tmpPersist
-    ], {
-      stdio: ["ignore", logFd, logFd]
-    });
+      devProcess = spawn("npx", [
+        "wrangler", "dev",
+        "--local",
+        "--port", port.toString(),
+        "--ip", "127.0.0.1",
+        "--persist-to", tmpPersist
+      ], {
+        stdio: ["ignore", logFd, logFd]
+      });
+    } else {
+      console.log("\n[1-3/6] Skipping local D1 migrations, seeding, and workerd spawn (using remote REGISTRY_URL)...");
+    }
 
     let ready = false;
     for (let i = 0; i < 40; i++) {
@@ -193,11 +211,16 @@ async function main() {
     }
 
     if (!ready) {
-      console.error("ERROR: Registry Worker failed to start.");
-      console.error(fs.readFileSync(devLog, "utf8"));
+      console.error(`ERROR: Registry at ${baseUrl} failed to respond to /v1/health.`);
+      if (!isRemote) {
+        const devLog = path.join(tmpRoot, "wrangler.log");
+        if (fs.existsSync(devLog)) {
+          console.error(fs.readFileSync(devLog, "utf8"));
+        }
+      }
       process.exit(1);
     }
-    console.log("   Registry Worker online and healthy.");
+    console.log(`   Registry Worker online and healthy at ${baseUrl}.`);
 
     // Helper to invoke the real CLI
     const runCli = (args, options = {}) => {
