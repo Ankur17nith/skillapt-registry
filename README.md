@@ -1,261 +1,180 @@
 # skillapt-registry
 
-> The independent package registry for AI agent skills. Built with **TypeScript**, **Hono**, **Cloudflare Workers**, **Cloudflare D1**, and **Cloudflare R2**.
+**The package registry behind [skillapt](https://github.com/Ankur17nith/skillapt): publish, discover and install AI agent skills with integrity guarantees. Runs entirely on Cloudflare's free tier.**
 
-`skillapt` is a dedicated, secure package manager and registry designed specifically for **AI agent skills** (compatible with Claude, Cursor, Codex, Antigravity, and custom agentic runtimes), distributing immutable, sandboxed `.tar.gz` packages with declarative permission policies.
+[![CI](https://github.com/Ankur17nith/skillapt-registry/actions/workflows/ci.yml/badge.svg)](https://github.com/Ankur17nith/skillapt-registry/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.5-green.svg)](https://nodejs.org/)
+[![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020.svg)](https://workers.cloudflare.com/)
 
-The branding and product name lives in exactly one constant: [`PRODUCT_NAME`](src/config.ts) in `src/config.ts`.
+skillapt is a package manager for **AI agent skills** (folders of instructions, prompts and helper files for Claude, Cursor, Codex, Antigravity and custom agents). This repository is the **registry service**: the HTTP API the `skillapt` CLI talks to, built with TypeScript and [Hono](https://hono.dev/) on Cloudflare Workers, D1 (SQLite) and R2 (object storage).
 
----
+> **Status.** The code is complete and covered by tests, but **no public instance is deployed yet**, and there is no registry domain. You deploy your own instance for free on a `*.workers.dev` address by following [`docs/DEPLOY.md`](docs/DEPLOY.md). Any hostname you see in examples is a placeholder.
 
-## Architecture & Core Philosophy
+## The skillapt project
 
-1. **Zero Execution on Registry**: The registry never executes or evaluates untrusted package code. All package tarballs are statically inspected and served as static assets.
-2. **Strict Package Validation**:
-   - Tarballs must be gzip archives (`.tar.gz` or `.tgz`) under **5 MB** compressed, **25 MB** uncompressed.
-   - Allowed file types: Documentation (`.md`, `.txt`, `.prompt`, `.rst`), data (`.json`, `.yaml`, `.csv`, `.tsv`, `.xml`, `.xsd`), web assets (`.html`, `.css`, `.svg`), templates (`.jinja`, `.mustache`, `.hbs`), and scripts (`.py`, `.ts`, `.sh`, `.bash`, etc.).
-   - Header validation, magic byte checking (rejects ELF, Mach-O, PE MZ, Java class, WASM), and path normalization (rejects symlinks, hardlinks, absolute paths, duplicate paths, and traversal `..`).
-   - Mandatory non-empty [`SKILL.md`](docs/SPEC.md) with valid YAML frontmatter and [`skill.json`](docs/SPEC.md) manifest.
-3. **Immutable Releases & Atomicity**:
-   - Versions are frozen upon publication. Once published, a version's tarball and metadata cannot be altered or overwritten.
-   - Create-only R2 uploads (`onlyIf: { etagDoesNotMatch: "*" }`) and atomic D1 `batch()` metadata insertion with automatic rollback on failure.
-   - Attempting to overwrite an existing version returns `409 Conflict`.
-4. **Resilient Yank Behavior**:
-   - Package owners can yank compromised versions idempotently via `POST /v1/skills/:name/:version/yank` (with optional reason) and un-yank via `DELETE /v1/skills/:name/:version/yank`.
-   - Yanked versions are hidden from general search and SemVer range resolution (`^1.0.0`), but direct pinned downloads remain accessible so existing builds and lockfiles never break.
-5. **Admin Takedowns & Version Status**:
-   - Malicious packages can be taken down by administrators via `/v1/admin/skills/:name/:version/takedown`, setting version status to `removed`.
-   - Downloads of removed versions return `410 Gone` with `Cache-Control: no-store` and omitted download URLs in metadata.
-6. **Cryptographic Checksums**:
-   - SHA-256 digests and integrity strings (`sha256-<hex>`) are computed upon publish and verified by the CLI during installation against [`skills.lock.json`](docs/SPEC.md).
-7. **Authentication & Token Security**:
-   - Web sessions: GitHub OAuth 2.0 with HTTP-only, secure, SameSite cookies and CSRF origin verification on mutating requests.
-   - Web Dashboard (`/dashboard`): Server-rendered HTML dashboard with strict CSP (`script-src 'none'`) and CSRF protection for managing personal access tokens.
-   - CLI operations: Personal access tokens (`apt_live_...`). Generating and revoking tokens requires an active web session. Raw tokens are shown **only once** upon generation; the database stores exclusively the SHA-256 hash.
-   - **Dashboard Login & Token Flow**:
-     1. Visit `https://registry.skillapt.dev/dashboard` (or `http://localhost:8787/dashboard` in development).
-     2. Click "Sign in with GitHub" to authenticate via GitHub OAuth.
-     3. Once redirected to the Dashboard, enter a token name and click "Create API Token".
-     4. Copy the generated token (`apt_live_...`) immediately (it is displayed only once).
-     5. Authenticate the CLI using `skillapt login --token-stdin < token.txt` (or pass the token interactively).
-8. **Durable Object Rate Limiting**:
-   - Sliding-window rate limiting enforced globally using Cloudflare Durable Objects (`RateLimiterDO`).
-   - Tracks client IP using `cf-connecting-ip`.
-   - Standard 429 response body with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
-9. **Deduplicated Downloads & Caching**:
-   - Downloads cached at Cloudflare edge (`Cache-Control: public, max-age=31536000, immutable`).
-   - Conditional requests with `If-None-Match` return `304 Not Modified`.
-   - Deduplicated daily download counters per IP hash via `download_dedupe` table.
+| Repository | Purpose |
+| :--- | :--- |
+| [`skillapt`](https://github.com/Ankur17nith/skillapt) | The CLI (`npx skillapt ...`): init, pack, install, publish, lockfile |
+| **`skillapt-registry`** (this repo) | The registry API: storage, search, auth, moderation |
+| [`skillapt-web`](https://github.com/Ankur17nith/skillapt-web) | The website: browse and search skills |
 
----
-
-## Tech Stack
-
-- **Runtime**: [Cloudflare Workers](https://workers.cloudflare.com/) (Edge Compute)
-- **Web Framework**: [Hono](https://hono.dev/) v4
-- **Database**: [Cloudflare D1](https://developers.cloudflare.com/d1/) (Serverless SQLite)
-- **Object Storage**: [Cloudflare R2](https://developers.cloudflare.com/r2/) (S3-compatible bucket)
-- **Rate Limiting**: Cloudflare Durable Objects (`RateLimiterDO`)
-- **Validation**: [Zod](https://zod.dev/) & [SemVer](https://github.com/npm/node-semver)
-- **Testing**: [Vitest](https://vitest.dev/) (Unit & Integration tests with in-memory SQLite and R2 mocks)
-- **Package Manager**: `pnpm`
-
----
-
-## Local Development & Testing
-
-### 1. Prerequisites
-- Node.js `>=22.5`
-- `pnpm`
-
-### 2. Installation
-```bash
-git clone https://github.com/Ankur17nith/skillapt-registry.git
-cd skillapt-registry
-pnpm install
+```mermaid
+flowchart LR
+  CLI["skillapt CLI"] -->|"HTTPS /v1 + Bearer token"| W
+  WEB["skillapt-web<br/>(Cloudflare Pages)"] -->|"GET /v1 (CORS allowlist)"| W
+  subgraph CF["Cloudflare free tier"]
+    W["Worker (Hono)"]
+    W --> D1[("D1<br/>metadata, users,<br/>tokens, audit log")]
+    W --> R2[("R2<br/>immutable .tgz archives")]
+    W --> DO["Durable Object<br/>rate limiter"]
+    CRON["Cron trigger<br/>daily cleanup"] --> W
+  end
+  GH["GitHub OAuth"] <-->|"login"| W
 ```
 
-### 3. Run Test Suite
-```bash
-# Run all unit and integration tests with vitest
-pnpm test
+## Features
 
-# Run TypeScript typecheck
-pnpm typecheck
+- **Immutable releases.** A published version can never be changed. R2 writes are create-only and D1 metadata is written in one atomic batch; republishing returns `409`.
+- **Strict package validation.** Archives must be `.tar.gz` (5 MB compressed, 25 MB uncompressed, 500 files). Paths are normalized and checked (no symlinks, hardlinks, `..`, absolute or hidden paths, no duplicates), file types are allow-listed, and executables (ELF, Mach-O, PE, Java class, WASM) are rejected by magic bytes. A valid `SKILL.md` and `skill.json` are mandatory.
+- **Integrity everywhere.** SHA-256 digests (`sha256-<hex>`) are computed at publish time, served in metadata and as the `ETag`, and checked by the CLI against its lockfile.
+- **Ownership and scopes.** Unscoped names are first-come; `@scope/name` packages are tied to the owning GitHub account.
+- **Yank and takedown.** Owners yank bad versions (hidden from ranges, still downloadable for existing lockfiles). Admins remove versions entirely (`410 Gone`) with an audit log entry.
+- **Safe authentication.** GitHub OAuth for the web dashboard (HTTP-only, `Secure`, `SameSite=Lax` cookies, CSRF checks), and hashed personal access tokens (`apt_live_...`, 90-day default expiry) for the CLI. Only SHA-256 hashes are stored.
+- **Abuse resistance.** Sliding-window rate limits on a Durable Object (fails open if the limiter is unavailable), body-size caps, salted IP hashing for download de-duplication and abuse reports.
+- **Operable.** A read-only `MAINTENANCE_MODE`, a daily cleanup cron, a post-deploy verification script and a runbook.
 
-# Run production dependency audit
-pnpm audit --prod
+## API overview
 
-# Run workerd runtime smoke test
-pnpm smoke
-```
-
-### 4. Local Database Setup & Migrations
-```bash
-# Apply migrations to local D1 SQLite
-pnpm db:migrate:local
-
-# Seed 20 realistic agent skills and demo users safely (refuses --remote and production)
-pnpm db:seed
-```
-
-### 5. Start Local Development Server
-```bash
-pnpm dev
-# Registry runs locally at http://localhost:8787
-```
-
----
-
-## API Reference Overview
-
-All API endpoints are mounted under `/v1` (with the web token dashboard mounted at `/dashboard`):
+Everything lives under `/v1` (plus the server-rendered token dashboard at `/dashboard`).
 
 | Method | Endpoint | Description | Auth |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/v1/health` | Health check endpoint | Public |
-| `GET` | `/v1/skills` | Search, filter, and list skills (paginated, single query) | Public (Rate-limited) |
-| `GET` | `/v1/skills/:name` | Skill details, readme, and versions map | Public |
-| `GET` | `/v1/skills/:name/:version` | Exact version metadata and integrity hash | Public |
-| `GET` | `/v1/skills/:name/-/:file` | Download package tarball (`.tgz`) | Public |
-| `POST`| `/v1/skills` | Publish new package or version (`multipart/form-data`) | Bearer Token / Session |
-| `POST`| `/v1/skills/:name/:version/yank` | Idempotent yank of a published version | Owner only |
-| `DELETE`| `/v1/skills/:name/:version/yank` | Idempotent un-yank of a published version | Owner only |
-| `POST`| `/v1/admin/skills/:name/:version/takedown` | Admin takedown of a version (`status = 'removed'`) | Admin Role |
-| `POST`| `/v1/admin/skills/:name/:version/restore` | Admin restoration of a version | Admin Role |
-| `GET` | `/v1/admin/reports` | List abuse reports with status filter & pagination | Admin Role |
-| `POST`| `/v1/admin/reports/:id/resolve` | Mark abuse report as resolved | Admin Role |
-| `GET` | `/dashboard` | Server-rendered HTML token management dashboard | Session Cookie |
-| `GET` | `/v1/me` | Authenticated user profile | Bearer Token / Session |
-| `GET` | `/v1/tokens` | List user's active API tokens | Session Cookie |
-| `POST`| `/v1/tokens` | Generate new API token (`apt_live_...`) | Session Cookie |
-| `DELETE`| `/v1/tokens/:id` | Revoke an API token | Session Cookie |
-| `GET` | `/v1/auth/github` | Initiate GitHub OAuth authorization flow | Public |
-| `GET` | `/v1/auth/github/callback` | OAuth redirect callback handler (claims scope) | Public |
-| `POST`| `/v1/auth/logout` | Terminate session and clear cookie | Session Cookie |
-| `POST`| `/v1/reports` | Submit abuse or vulnerability report (salted IP hash) | Public (Rate-limited) |
-| `GET` | `/v1/stats` | Homepage counts and platform aggregates | Public |
+| `GET` | `/v1/health` | Health check | Public |
+| `GET` | `/v1/skills` | Search, filter and list skills (paginated) | Public |
+| `GET` | `/v1/skills/:name` | Skill details, readme, versions | Public |
+| `GET` | `/v1/skills/:name/:version` | Version metadata and integrity hash | Public |
+| `GET` | `/v1/skills/:name/-/:version.tgz` | Download a package | Public |
+| `POST` | `/v1/skills` | Publish a package (`multipart/form-data` or `application/gzip`) | Token / session |
+| `POST` / `DELETE` | `/v1/skills/:name/:version/yank` | Yank / un-yank a version | Owner |
+| `POST` | `/v1/admin/skills/:name/:version/takedown` \| `restore` | Remove / restore a version | Admin |
+| `GET` | `/v1/admin/reports` | List abuse reports | Admin |
+| `POST` | `/v1/admin/reports/:id/resolve` | Resolve a report | Admin |
+| `POST` | `/v1/reports` | Report a skill | Public (rate-limited) |
+| `GET` | `/v1/me` | Current user | Token / session |
+| `GET` / `POST` / `DELETE` | `/v1/tokens`, `/v1/tokens/:id` | Manage API tokens | Session |
+| `GET` | `/v1/auth/github` (+ `/callback`) | GitHub OAuth login | Public |
+| `POST` | `/v1/auth/logout` | End the session | Session |
+| `GET` | `/v1/stats` | Registry totals | Public |
 
-For complete schemas, request/response examples, and error envelope definitions, refer to:
-- [`docs/SPEC.md`](docs/SPEC.md)
-- [`docs/openapi.yaml`](docs/openapi.yaml)
+Scoped names are URL-encoded in paths (`@alice/tool` becomes `%40alice%2Ftool`). Full request and response schemas: [`docs/openapi.yaml`](docs/openapi.yaml) and [`docs/SPEC.md`](docs/SPEC.md).
 
----
+## Quick start (local development)
 
-## GitHub OAuth App Setup Guide
+You need Node.js **>= 22.5** and [pnpm](https://pnpm.io/).
 
-To enable GitHub login for the skillapt web dashboard:
+```bash
+git clone https://github.com/Ankur17nith/skillapt-registry.git
+cd skillapt-registry
+pnpm install --frozen-lockfile
 
-1. Navigate to **GitHub Settings** -> **Developer Settings** -> **OAuth Apps** -> **New OAuth App**.
-2. Fill in the details:
-   - **Application name**: `Skillapt Registry`
-   - **Homepage URL**: `https://skillapt.dev` (or `http://localhost:3000` for local testing)
-   - **Authorization callback URL**: `https://registry.skillapt.dev/v1/auth/github/callback` (or `http://localhost:8787/v1/auth/github/callback` in local dev)
-3. Click **Register application**.
-4. Copy the **Client ID**.
-5. Generate a new **Client Secret** and copy it immediately.
-6. Configure the variables in your deployment environment (see below).
+cp .dev.vars.example .dev.vars        # then fill in GitHub OAuth values (optional for API-only work)
+pnpm db:migrate:local                 # create the local D1 database
+pnpm db:seed:local                    # optional: sample skills
+pnpm dev                              # http://localhost:8787
+```
 
----
+```bash
+curl -s http://localhost:8787/v1/health
+curl -s "http://localhost:8787/v1/skills?q=pdf"
+```
 
-## Production Deployment Steps (Cloudflare)
+For GitHub login locally, create an OAuth app with the callback `http://localhost:8787/v1/auth/github/callback` and put its credentials in `.dev.vars`.
 
-### 1. Authenticate with Wrangler
+### Publish a package
+
+```bash
+curl -X POST http://localhost:8787/v1/skills \
+  -H "Authorization: Bearer <YOUR_API_TOKEN>" \
+  -F "file=@my-skill.tar.gz"
+```
+
+Or use the CLI: `export SKILLAPT_REGISTRY=http://localhost:8787` then `skillapt publish`.
+
+## Configuration
+
+| Name | Kind | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `ENVIRONMENT` | var | yes | `production` (default in `wrangler.jsonc`), or `development` / `test` locally. **Any other or missing value is treated as production** (HTTPS-only cookies, no localhost origins, masked errors). |
+| `PUBLIC_ORIGIN` | var | recommended | The registry's own public URL, used for same-origin CSRF checks. |
+| `CORS_ORIGIN` | var | for browsers | Exact, comma-separated origins allowed to call the API cross-origin (e.g. the Pages site). `*` is rejected; localhost is ignored in production; empty allows none. |
+| `MAINTENANCE_MODE` | var | no | `true` rejects all writes with `503` while reads keep working. |
+| `GITHUB_CLIENT_ID` | secret | for login | GitHub OAuth app client id. |
+| `GITHUB_CLIENT_SECRET` | secret | for login | GitHub OAuth app client secret. |
+| `HASH_SALT` | secret | yes | Salt for hashing client IPs (`REPORT_SALT` is accepted as a legacy name). |
+
+Secrets are set with `npx wrangler secret put <NAME>` (production) or in the git-ignored `.dev.vars` (local). Never commit them.
+
+## Deploy for free on Cloudflare
+
+No domain and no paid plan are needed. In short:
+
 ```bash
 npx wrangler login
-```
-
-### 2. Cloudflare Resources & Bindings
-Ensure the following bindings are configured in [`wrangler.jsonc`](wrangler.jsonc) under `env.production`:
-
-- **D1 Database**: `DB` (`skillapt-db`)
-  ```bash
-  npx wrangler d1 create skillapt-db
-  ```
-  Set the returned `database_id` in `wrangler.jsonc`.
-
-- **R2 Storage Bucket**: `STORAGE` (`skillapt-packages`)
-  ```bash
-  npx wrangler r2 bucket create skillapt-packages
-  ```
-
-- **Durable Object Binding**: `RATE_LIMITER_DO` (`RateLimiterDO`)
-  The Durable Object class `RateLimiterDO` is compiled with the worker and provides sliding-window rate limiting.
-
-### 3. Run Production Database Migrations
-```bash
+npx wrangler d1 create skillapt-db              # paste the id into wrangler.jsonc
+npx wrangler r2 bucket create skillapt-packages
 npx wrangler d1 migrations apply DB --remote
+npx wrangler secret put GITHUB_CLIENT_ID
+npx wrangler secret put GITHUB_CLIENT_SECRET
+npx wrangler secret put HASH_SALT
+npx wrangler deploy                             # -> https://skillapt-registry.<you>.workers.dev
 ```
 
-### 4. Configure Production Environment Variables & Secrets
-Never commit secrets to git.
+The full walkthrough, free-tier limits (R2 needs a card on file; the free Workers plan allows 10 ms CPU per request, so very large publishes may need a paid plan) and troubleshooting are in [`docs/DEPLOY.md`](docs/DEPLOY.md). Day-2 operations (takedowns, backups, key rotation, maintenance mode) are in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
-**Environment Variables** (configured in `wrangler.jsonc` under `env.production.vars`):
-- `ENVIRONMENT`: Set to `"production"` (enforces HTTPS cookies, disables localhost CORS).
-- `PUBLIC_ORIGIN`: Canonical public URL of the registry (e.g. `"https://registry.skillapt.dev"`).
-- `CORS_ORIGIN`: Allowed origins for cross-origin browser requests (e.g. `"https://skillapt.dev"`).
+## Security model
 
-**Secrets** (injected securely via Wrangler into production):
+- **The registry never executes package code.** Archives are inspected statically and served as opaque files.
+- **Defense in depth on uploads:** size caps enforced while streaming, zip-bomb protection, tar parsing that cannot be desynchronised from real extractors (PAX sizes are honored), path and type allow-lists, magic-byte checks.
+- **Secrets at rest:** API tokens and sessions are stored only as SHA-256 hashes; the token is shown once. Client IPs are only stored as salted hashes.
+- **Web safety:** strict CSP (`default-src 'none'`), HSTS, `X-Frame-Options: DENY`, exact-match CORS allowlist, per-session CSRF tokens on the dashboard, Origin/Referer checks for cookie-authenticated API writes, and no secrets in URLs.
+- **Fail safe:** a misconfigured environment is treated as production, and the rate limiter fails open rather than taking the API down.
+
+To report a vulnerability privately, see [`SECURITY.md`](SECURITY.md).
+
+## Testing
+
 ```bash
-npx wrangler secret put GITHUB_CLIENT_ID --env production
-npx wrangler secret put GITHUB_CLIENT_SECRET --env production
-npx wrangler secret put HASH_SALT --env production
-```
-*(Note: `HASH_SALT` is a cryptographically secure random string used to compute salted SHA-256 hashes of client IPs for download deduplication and abuse reporting).*
-
-### 5. Bootstrap the First Admin User
-After signing in via GitHub OAuth, elevate your user to admin role:
-```bash
-# In production:
-npx wrangler d1 execute DB --remote --command="UPDATE users SET role = 'admin' WHERE handle = '<your-github-handle>';"
-
-# In local development:
-npx wrangler d1 execute DB --local --command="UPDATE users SET role = 'admin' WHERE handle = '<your-github-handle>';"
+pnpm typecheck           # TypeScript
+pnpm test                # ~180 unit and integration tests (in-memory D1/R2 mocks)
+pnpm audit --prod        # dependency advisories
+pnpm smoke               # boots the Worker on local workerd, checks /v1/health
+pnpm test:integration    # 14 end-to-end scenarios on workerd with local D1, R2 and Durable Objects
+pnpm conformance         # drives the real skillapt CLI against this registry (set SKILLAPT_CLI_DIR)
 ```
 
-### 6. Deploy the Worker
-```bash
-pnpm deploy
+`pnpm conformance` needs a built checkout of the [CLI](https://github.com/Ankur17nith/skillapt) (`SKILLAPT_CLI_DIR=/path/to/skillapt`). CI runs everything above in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Project layout
+
 ```
-Your `skillapt` registry worker is now live at `registry.skillapt.dev`!
-
----
-
-## Example Usage with cURL
-
-### 1. Search Skills
-```bash
-curl -s "http://localhost:8787/v1/skills?q=pdf&category=documents" | jq .
-```
-
-### 2. Get Skill Details
-```bash
-curl -s "http://localhost:8787/v1/skills/pdf-summarizer" | jq .
+src/
+  index.ts            app wiring: headers, CORS, rate limit, routes, cron handler
+  routes/             skills, auth, tokens, admin, reports, stats, dashboard
+  middleware/         authentication + CSRF, rate limiting
+  validation/         tar archive inspection, manifest schema (zod)
+  rate-limiter/       Durable Object + in-memory limiter
+  utils/              crypto, environment, IP-hash salt
+migrations/           D1 schema (0001-0005)
+tests/                vitest suites (security regressions in tests/security)
+scripts/              smoke, integration, conformance, post-deploy check
+docs/                 SPEC, OpenAPI, DEPLOY, RUNBOOK
 ```
 
-### 3. Generate a CLI Token (via Session Dashboard or API)
-```bash
-curl -s -X POST "http://localhost:8787/v1/tokens" \
-  -H "Cookie: skillapt_session=<YOUR_SESSION_ID>" \
-  -H "Origin: http://localhost:8787" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-workstation"}' | jq .
-```
+## Contributing
 
-### 4. Publish a Skill Package
-```bash
-curl -X POST "http://localhost:8787/v1/skills" \
-  -H "Authorization: Bearer <YOUR_API_TOKEN>" \
-  -F "file=@my-agent-skill.tar.gz"
-```
-
-### 5. Download a Package Tarball
-```bash
-curl -s -O -J "http://localhost:8787/v1/skills/pdf-summarizer/-/1.2.0.tgz"
-```
-
----
+Contributions are welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first.
 
 ## License
 
-MIT © 2026 Skillapt Team
+[MIT](LICENSE) © 2026 skillapt contributors
