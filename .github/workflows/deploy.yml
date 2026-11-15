@@ -1,28 +1,23 @@
 name: Deploy Worker
 
+# Manual deployment to Cloudflare Workers (free *.workers.dev address).
+# Requires repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, and
+# a real D1 database_id in wrangler.jsonc (see docs/DEPLOY.md). Without the token
+# the workflow only reports that deployment was skipped.
+
 on:
   workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target Cloudflare environment"
-        required: true
-        default: "production"
-        type: choice
-        options:
-          - production
-          - staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: "deploy-${{ github.event.inputs.environment || 'production' }}"
+  group: deploy-production
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy to Cloudflare Workers (${{ github.event.inputs.environment || 'production' }})
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    name: Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -30,8 +25,7 @@ jobs:
       # (a step's own `env` is not visible to that step's `if`).
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     environment:
-      name: ${{ github.event.inputs.environment || 'production' }}
-      url: ${{ (github.event.inputs.environment == 'staging') && 'https://staging-registry.skillapt.dev' || 'https://registry.skillapt.dev' }}
+      name: production
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -60,11 +54,9 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --env ${{ github.event.inputs.environment || 'production' }}
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
 
       - name: Inform missing Cloudflare secrets
         if: ${{ env.CLOUDFLARE_API_TOKEN == '' }}
         run: |
-          echo "::notice ::CLOUDFLARE_API_TOKEN is not configured in repository secrets. Worker deployment skipped. To enable deployments, configure CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in environment secrets."
+          echo "::notice ::CLOUDFLARE_API_TOKEN is not configured in repository secrets. Worker deployment skipped. To enable deployments, configure CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID."

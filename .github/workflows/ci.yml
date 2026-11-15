@@ -43,8 +43,8 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod
 
-      - name: Wrangler deploy dry-run (production env)
-        run: npx wrangler deploy --dry-run --env production
+      - name: Wrangler deploy dry-run
+        run: npx wrangler deploy --dry-run
 
       - name: Workerd smoke test
         run: pnpm smoke
