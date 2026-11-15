@@ -430,6 +430,77 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | agent | test/cli-contract-conformance | REG-38 | Implemented scripts/conformance.mjs and pnpm conformance; verified all 12 CLI scenarios (doctor, search, init, pack, publish, info, install, --frozen, yank, un-yank, outdated/update, takedown refusal) and 5 attack tarballs pass | merge to main, then Branch 11 docs/ci-spec-sync |
 | 2026-11-15 | agent | docs/ci-spec-sync | REG-31, REG-32, REG-33 | Updated ci.yml (test:integration, wrangler deploy --env production, conformance job), synced SPEC.md, openapi.yaml, README.md (vars, secrets, dashboard flow), SECURITY.md, and CHANGELOG.md | merge to main, then Branch 12 chore/production-deploy |
 | 2026-11-15 | agent | chore/production-deploy | REG-34, REG-39 | Created docs/DEPLOY.md, scripts/post-deploy-check.sh, and docs/RUNBOOK.md; updated REGISTRY_VERSION to 1.2.0; verified post-deploy-check passes locally | merge to main; human runs REG-35 and REG-36 |
+| 2026-11-15 | agent | main | Final Verification | Verified git status, branch tracking, remote heads, graph log, merged branches, zero diff between main and origin/main, and all test suites pass | ready for human production deployment and acceptance demo |
+
+### 13.1 Post-Merge Git State Verification
+
+```text
+$ git diff origin/main main
+(empty)
+
+$ git branch -r --merged origin/main
+  origin/HEAD -> origin/main
+  origin/chore/production-deploy
+  origin/chore/seed-and-test-hardening
+  origin/dependabot/github_actions/all-actions-b5f7b3ce1d
+  origin/dependabot/npm_and_yarn/zod-4.6.7
+  origin/docs/ci-spec-sync
+  origin/docs/github-pages
+  origin/docs/plan-reconcile
+  origin/docs/spec-v1.1
+  origin/feat/auth-sessions-tokens
+  origin/feat/chore-project-setup
+  origin/feat/database-schema-and-migrations
+  origin/feat/docs-readme-and-deploy
+  origin/feat/docs-spec-and-openapi
+  origin/feat/package-validation
+  origin/feat/publish-endpoint
+  origin/feat/read-api
+  origin/feat/real-seed
+  origin/feat/takedown-and-version-status
+  origin/feat/tarball-storage-and-download
+  origin/feat/token-dashboard
+  origin/feat/yank-reports-ratelimits-stats
+  origin/fix/auth-sessions-csrf-cors
+  origin/fix/publish-atomicity-and-limits
+  origin/fix/publish-validation
+  origin/fix/rate-limiting
+  origin/fix/search-download-reports
+  origin/fix/worker-startup-and-config
+  origin/main
+  origin/test/cli-contract-conformance
+
+$ git ls-remote --heads origin
+47747916591006e079a3f17788460ffd9d21ea19	refs/heads/chore/production-deploy
+d2a2d5f5d1e5a9a8c1e1b87039b527974f124a32	refs/heads/chore/seed-and-test-hardening
+ffb7ac413a38a831117d9494e8190a560f1341db	refs/heads/dependabot/github_actions/all-actions-b5f7b3ce1d
+a039d08ab4b36f9ed396c6c1a812474bb5e8840f	refs/heads/dependabot/npm_and_yarn/zod-4.6.7
+cc8ebe00e6c2e080a6bed7315aa375b89a856d44	refs/heads/docs/ci-spec-sync
+e411bfa10ab8ac1da9c0ec9009cc09dd125d9dee	refs/heads/docs/github-pages
+fc302a57a19fd70c9b813934e7779ddd853e80b7	refs/heads/docs/plan-reconcile
+b2edd542523737edfaa2bfdb1d38577095891382	refs/heads/docs/spec-v1.1
+4d41654be1d811974db76c913bde904432d97c62	refs/heads/feat/auth-sessions-tokens
+fe7905bcd139b24a1c277b43ba4f3486208aff27	refs/heads/feat/chore-project-setup
+fc88ab35434196d3cde2b1369799ca974be97a79	refs/heads/feat/database-schema-and-migrations
+20e011a7b9118c47e0a913037bfdcb4f0d2679f3	refs/heads/feat/docs-readme-and-deploy
+99362a5fbdf7f4a2c75ff7d721fa789732883742	refs/heads/feat/docs-spec-and-openapi
+b906dd670db6244a8edb2c4844f8d988edc44349	refs/heads/feat/package-validation
+0ef964acef83e71cc619449fd48b02e6ffdbfe25	refs/heads/feat/publish-endpoint
+422b06aa86a51018358a5c20f85b250b3185ef01	refs/heads/feat/read-api
+b2edd542523737edfaa2bfdb1d38577095891382	refs/heads/feat/real-seed
+e2506ea2bbe2a73a085cc22f22da92108a3e8693	refs/heads/feat/takedown-and-version-status
+2acb034134aa5afc240ab6c9417842e1348f93b2	refs/heads/feat/tarball-storage-and-download
+215463d641be789d2e967407ce1bfc5d6d39cbca	refs/heads/feat/token-dashboard
+b6328ebdd3ba61f26eff7c97ecbc53395b3d41ff	refs/heads/feat/yank-reports-ratelimits-stats
+aeae87fc7449c802f61a209c79ba2c68edcd37b8	refs/heads/fix/auth-sessions-csrf-cors
+ce87342a55b28b3fc7afa428735b61ffb918d437	refs/heads/fix/publish-atomicity-and-limits
+2192be4905ff0489cbb11f47d76cc6cc9aa92eae	refs/heads/fix/publish-validation
+faf99190d521ca934787a46c2e48d8b5cfe9b28d	refs/heads/fix/rate-limiting
+e604186df9da61649730322e4752894fb48f65f2	refs/heads/fix/search-download-reports
+1927008800eb39891f538df1599b49fe7bae21e6	refs/heads/fix/worker-startup-and-config
+10268a8f2f77675437b8cb313fb8cf3d6f46278c	refs/heads/main
+13d6104473bdf05d9f7d1581ae428945a641e603	refs/heads/test/cli-contract-conformance
+```
 
 ---
 
