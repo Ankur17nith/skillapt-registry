@@ -6,10 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     name: Typecheck, Test, Audit, Deploy Check, Smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -47,6 +55,7 @@ jobs:
   conformance:
     name: CLI Contract Conformance
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout registry repository
         uses: actions/checkout@v7
@@ -63,19 +72,23 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
+        with:
+          package_json_file: registry/package.json
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: "pnpm"
+          cache-dependency-path: registry/pnpm-lock.yaml
 
       - name: Run CLI Conformance Test
         run: |
           if [ -d "skillapt" ] && [ -f "skillapt/package.json" ]; then
             cd skillapt
-            pnpm install --frozen-lockfile || pnpm install
-            pnpm build
+            # The CLI repository is npm-based (package-lock.json).
+            npm ci
+            npm run build
             cd ../registry
             pnpm install --frozen-lockfile
             SKILLAPT_CLI_DIR=$GITHUB_WORKSPACE/skillapt pnpm conformance
