@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { app } from "../src/index";
+import { app, handleScheduled } from "../src/index";
 import { MockD1Database } from "./helpers/mock-d1";
 import { MockR2Bucket } from "./helpers/mock-r2";
 import { InMemoryRateLimiter } from "../src/rate-limiter/do";
@@ -289,6 +289,61 @@ describe("Branch 8: Search, Download, and Abuse Reports Hardening", () => {
       expect(foundReport).toBeDefined();
       expect(foundReport.reporter_hash).toBe(expectedHash);
       expect(foundReport.reporter_ip).toBeUndefined();
+    });
+  });
+
+  describe("4. Scheduled Cron Handler (REG-42)", () => {
+    it("purges expired sessions, old download_dedupe rows (> 2 days), and expired tokens", async () => {
+      const pastDate = new Date(Date.now() - 5 * 86400 * 1000).toISOString();
+      const futureDate = new Date(Date.now() + 5 * 86400 * 1000).toISOString();
+      const threeDaysAgoDay = new Date(Date.now() - 3 * 86400 * 1000).toISOString().slice(0, 10);
+      const todayDay = new Date().toISOString().slice(0, 10);
+
+      // 1. Seed sessions: one expired, one valid
+      await mockDb.prepare(
+        "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('sess_expired', 'usr_alexdev', ?, ?)"
+      ).bind(pastDate, pastDate).run();
+      await mockDb.prepare(
+        "INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('sess_valid', 'usr_alexdev', ?, ?)"
+      ).bind(futureDate, new Date().toISOString()).run();
+
+      // 2. Seed download_dedupe: one old (3 days ago), one today
+      await mockDb.prepare(
+        "INSERT INTO download_dedupe (skill_name, version, ip_hash, day) VALUES ('pdf-summarizer', '1.2.0', 'hash_old', ?)"
+      ).bind(threeDaysAgoDay).run();
+      await mockDb.prepare(
+        "INSERT INTO download_dedupe (skill_name, version, ip_hash, day) VALUES ('pdf-summarizer', '1.2.0', 'hash_today', ?)"
+      ).bind(todayDay).run();
+
+      // 3. Seed api_tokens: one expired, one valid
+      await mockDb.prepare(
+        "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, created_at) VALUES ('tok_expired', 'usr_alexdev', 'old-token', 'apt_live_old', 'hash_old_token', ?, ?)"
+      ).bind(pastDate, pastDate).run();
+      await mockDb.prepare(
+        "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, created_at) VALUES ('tok_active', 'usr_alexdev', 'active-token', 'apt_live_act', 'hash_act_token', ?, ?)"
+      ).bind(futureDate, new Date().toISOString()).run();
+
+      // Run scheduled handler
+      const result = await handleScheduled({ cron: "0 0 * * *" }, env);
+      expect(result.purgedSessions).toBeGreaterThanOrEqual(1);
+      expect(result.purgedDedupe).toBeGreaterThanOrEqual(1);
+      expect(result.purgedTokens).toBeGreaterThanOrEqual(1);
+
+      // Verify DB state
+      const expiredSess = await mockDb.prepare("SELECT * FROM sessions WHERE id = 'sess_expired'").first();
+      expect(expiredSess).toBeNull();
+      const validSess = await mockDb.prepare("SELECT * FROM sessions WHERE id = 'sess_valid'").first();
+      expect(validSess).not.toBeNull();
+
+      const oldDedupe = await mockDb.prepare("SELECT * FROM download_dedupe WHERE ip_hash = 'hash_old'").first();
+      expect(oldDedupe).toBeNull();
+      const todayDedupe = await mockDb.prepare("SELECT * FROM download_dedupe WHERE ip_hash = 'hash_today'").first();
+      expect(todayDedupe).not.toBeNull();
+
+      const expiredTok = await mockDb.prepare("SELECT * FROM api_tokens WHERE id = 'tok_expired'").first();
+      expect(expiredTok).toBeNull();
+      const activeTok = await mockDb.prepare("SELECT * FROM api_tokens WHERE id = 'tok_active'").first();
+      expect(activeTok).not.toBeNull();
     });
   });
 });

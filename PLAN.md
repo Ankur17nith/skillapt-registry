@@ -270,12 +270,12 @@ Order is mandatory. Each BRANCH is created from the latest `main`, merged with `
 
 #### Branch `fix/publish-validation`
 Create `tests/security/publish-attacks.test.ts` reproducing each attack in this branch and asserting 400/403.
-- [ ] **REG-05** (B-02, B-29) Migration `0002`: scopes table (§4.3). On login claim the lowercased GitHub login as the scope if it is a valid scope (D-011). `@scope/name` only by the scope owner (by `github_id`).
+- [x] **REG-05** (B-02, B-29) Migration `0002`: scopes table (§4.3). On login claim the lowercased GitHub login as the scope if it is a valid scope (D-011). `@scope/name` only by the scope owner (by `github_id`).
   AC: `sarahai` publishing `@alexdev/x` or `@anthropic/x` -> 403; renamed accounts keep their scope.
-- [ ] **REG-06** (B-03) `RESERVED_NAMES` in `src/config.ts` (list in §3.4) for unscoped names and scopes; reject `--` in names/scopes (D-003). AC: `claude`, `admin`, `a--b`, `@admin/x` -> 400.
-- [ ] **REG-07** (B-10) Canonical versions only (`semver.valid(v)===v`, no `+`, max 64). AC: `v1.0.0`, ` 1.0.0`, `1.0.0+evil`, `=1.0.0` -> 400.
-- [ ] **REG-08** (B-11, B-12) Manifest rules: dependency keys match the name regex; max 50 (`LIMITS.MAX_DEPENDENCIES`); no self-dependency; each dependency exists, is not removed and has a version satisfying the range (400 `INVALID_DEPENDENCY`); no cycles; depth <= 10; compatibility in the enum; repository https-only; license charset restricted (`[A-Za-z0-9.+() -]`, max 50); keywords per §3.4; SKILL.md <= 256 KB, parsed with the `yaml` package, `name` == on-disk folder name (D-004), non-empty `description`.
-- [ ] **REG-09** (B-04, B-05, B-09, B-13) Rewrite `src/validation/tar.ts`:
+- [x] **REG-06** (B-03) `RESERVED_NAMES` in `src/config.ts` (list in §3.4) for unscoped names and scopes; reject `--` in names/scopes (D-003). AC: `claude`, `admin`, `a--b`, `@admin/x` -> 400.
+- [x] **REG-07** (B-10) Canonical versions only (`semver.valid(v)===v`, no `+`, max 64). AC: `v1.0.0`, ` 1.0.0`, `1.0.0+evil`, `=1.0.0` -> 400.
+- [x] **REG-08** (B-11, B-12) Manifest rules: dependency keys match the name regex; max 50 (`LIMITS.MAX_DEPENDENCIES`); no self-dependency; each dependency exists, is not removed and has a version satisfying the range (400 `INVALID_DEPENDENCY`); no cycles; depth <= 10; compatibility in the enum; repository https-only; license charset restricted (`[A-Za-z0-9.+() -]`, max 50); keywords per §3.4; SKILL.md <= 256 KB, parsed with the `yaml` package, `name` == on-disk folder name (D-004), non-empty `description`.
+- [x] **REG-09** (B-04, B-05, B-09, B-13) Rewrite `src/validation/tar.ts`:
   - verify header checksums; allow only type flags `0`, NUL, `5`;
   - PAX `x` records: apply `path` and `size` to the next entry, ignore harmless keys (mtime, atime, ctime, uid, gid, uname, gname, comment), reject `linkpath`; reject `g`, GNU `L`/`K` and every other type with a clear error;
   - do not trim names; reject leading/trailing spaces, control chars, backslashes, empty segments;
@@ -289,48 +289,48 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 ### M2. Atomic publish, status/takedown, auth hardening
 
 #### Branch `fix/publish-atomicity-and-limits`
-- [ ] **REG-10** (B-14) Check `Content-Length` (413 for > 5 MB before reading); read the body through a size-capped stream (also when Content-Length is absent).
-- [ ] **REG-11** (B-14) Pipeline per §4.1: R2 create-only put (409 on conflict), single D1 `batch()`, delete the R2 object we created on failure. Extend `MockD1Database` (atomic `batch`) and `MockR2Bucket` (`onlyIf`). Verify real-R2 behavior in `test:integration` (miniflare) and record the result in D-009.
+- [x] **REG-10** (B-14) Check `Content-Length` (413 for > 5 MB before reading); read the body through a size-capped stream (also when Content-Length is absent).
+- [x] **REG-11** (B-14) Pipeline per §4.1: R2 create-only put (409 on conflict), single D1 `batch()`, delete the R2 object we created on failure. Extend `MockD1Database` (atomic `batch`) and `MockR2Bucket` (`onlyIf`). Verify real-R2 behavior in `test:integration` (miniflare) and record the result in D-009.
   V: tests for concurrent same-version publish and forced mid-way failure leave no orphans.
-- [ ] **REG-12** (B-25) Update skill-level description/readme only when the published version is the highest stable one; maintain `skills.latest_version` on publish/yank/restore/takedown.
-- [ ] **REG-13** Return `integrity: "sha256-<hex>"` in every version payload (§3.3).
+- [x] **REG-12** (B-25) Update skill-level description/readme only when the published version is the highest stable one; maintain `skills.latest_version` on publish/yank/restore/takedown.
+- [x] **REG-13** Return `integrity: "sha256-<hex>"` in every version payload (§3.3).
 
 #### Branch `feat/takedown-and-version-status`
-- [ ] **REG-14** (B-06) Migration `0003` per §4.3 (status with backfill, removal fields, `users.role`, `audit_log`).
-- [ ] **REG-15** (B-06) Admin routes: `POST /v1/admin/skills/:name/:version/takedown` and `/restore`, `GET /v1/admin/reports`, `POST /v1/admin/reports/:id/resolve`; role-based; every action recorded in `audit_log`.
-- [ ] **REG-16** (B-06) Behavior per §3.3: 410 on removed downloads (`Cache-Control: no-store`), `status`/`removed`/`removalReason` in metadata, no `tarballUrl`, excluded from `latest_version` and resolution.
-- [ ] **REG-17** (B-19) `POST .../yank` idempotent (sets true); `DELETE .../yank` un-yanks; reason <= 500 chars.
+- [x] **REG-14** (B-06) Migration `0003` per §4.3 (status with backfill, removal fields, `users.role`, `audit_log`).
+- [x] **REG-15** (B-06) Admin routes: `POST /v1/admin/skills/:name/:version/takedown` and `/restore`, `GET /v1/admin/reports`, `POST /v1/admin/reports/:id/resolve`; role-based; every action recorded in `audit_log`.
+- [x] **REG-16** (B-06) Behavior per §3.3: 410 on removed downloads (`Cache-Control: no-store`), `status`/`removed`/`removalReason` in metadata, no `tarballUrl`, excluded from `latest_version` and resolution.
+- [x] **REG-17** (B-19) `POST .../yank` idempotent (sets true); `DELETE .../yank` un-yanks; reason <= 500 chars.
   AC: sending the same yank twice keeps the version yanked.
 
 #### Branch `fix/auth-sessions-csrf-cors`
-- [ ] **REG-18** (B-17) Origin/Referer exact-match CSRF check on cookie-authenticated mutations (403 `CSRF_VIOLATION`); Bearer exempt.
-- [ ] **REG-19** (B-16) CORS: exact allowlist, reject `*` when credentials are on, no localhost origins in production, no fallback-origin echo, `Vary: Origin`.
-- [ ] **REG-20** (B-18) Token management requires a session (not a token); max 20 active tokens per user; `expires_at` (default 90 days) enforced in `authenticate()`; migration `0004` (§4.3).
-- [ ] **REG-21** (B-24) Sessions store `sha256(cookie value)`; delete expired sessions on lookup; rotate on login; add `csrf` column.
-- [ ] **REG-22** (B-24) OAuth: request only `read:user`; do not store email (`/v1/me` no longer returns it); handle `UNIQUE(handle)` conflicts on rename with a clear 409, never 500.
-- [ ] **REG-23** (B-20) `onError`: generic message + request id in production, real error logged server-side; request-id middleware; `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on authenticated routes.
+- [x] **REG-18** (B-17) Origin/Referer exact-match CSRF check on cookie-authenticated mutations (403 `CSRF_VIOLATION`); Bearer exempt.
+- [x] **REG-19** (B-16) CORS: exact allowlist, reject `*` when credentials are on, no localhost origins in production, no fallback-origin echo, `Vary: Origin`.
+- [x] **REG-20** (B-18) Token management requires a session (not a token); max 20 active tokens per user; `expires_at` (default 90 days) enforced in `authenticate()`; migration `0004` (§4.3).
+- [x] **REG-21** (B-24) Sessions store `sha256(cookie value)`; delete expired sessions on lookup; rotate on login; add `csrf` column.
+- [x] **REG-22** (B-24) OAuth: request only `read:user`; do not store email (`/v1/me` no longer returns it); handle `UNIQUE(handle)` conflicts on rename with a clear 409, never 500.
+- [x] **REG-23** (B-20) `onError`: generic message + request id in production, real error logged server-side; request-id middleware; `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on authenticated routes.
   V: hostile Origin + cookie -> 403; CORS `*` rejected at startup/with an error; a token creating a token -> 403; error text does not leak.
 
 #### Branch `feat/token-dashboard`
-- [ ] **REG-24** (B-08) `GET /dashboard`: server-rendered HTML, no external scripts, strict CSP, per-session CSRF token in forms. Shows the user, lists tokens, creates a token (shown once), revokes, logs out. OAuth callback redirects here; README login flow updated.
+- [x] **REG-24** (B-08) `GET /dashboard`: server-rendered HTML, no external scripts, strict CSP, per-session CSRF token in forms. Shows the user, lists tokens, creates a token (shown once), revokes, logs out. OAuth callback redirects here; README login flow updated.
   V: integration scenario with a fixture session; HTML escapes all user data (test with `<script>` in a token name).
 
 ### M3. Limits, performance, hygiene, conformance
 
 #### Branch `fix/rate-limiting`
-- [ ] **REG-25** (B-15) Replace the in-memory limiter with a Durable Object (SQLite-backed) sliding window behind a `RateLimiter` interface (in-memory impl for unit tests only). Client IP from `cf-connecting-ip` only (R13). Limits: downloads 120/min/IP, search 60/min/IP, publish 10/hour/user, OAuth 20/10 min/IP, token creation 10/day/user, reports 5/hour/IP, general 300/min. Add DO binding and `new_sqlite_classes` migration to wrangler.jsonc.
+- [x] **REG-25** (B-15) Replace the in-memory limiter with a Durable Object (SQLite-backed) sliding window behind a `RateLimiter` interface (in-memory impl for unit tests only). Client IP from `cf-connecting-ip` only (R13). Limits: downloads 120/min/IP, search 60/min/IP, publish 10/hour/user, OAuth 20/10 min/IP, token creation 10/day/user, reports 5/hour/IP, general 300/min. Add DO binding and `new_sqlite_classes` migration to wrangler.jsonc.
   V: tests per limit (429 + `Retry-After`); 15 publishes -> the 11th is 429; the DO works under `test:integration`.
 
 #### Branch `fix/search-download-reports`
-- [ ] **REG-26** (B-21) Search without N+1 (use `latest_version`); escape `LIKE` with `ESCAPE '\'`; cap `q` at 100 chars; validate `sort`/`category`; exclude prereleases from latest; `/v1/stats` cached 60 s.
-- [ ] **REG-27** (B-22) Download: stream the R2 body (no `arrayBuffer`), ETag/`If-None-Match` (304), `immutable` only for active versions, short max-age for yanked; dedupe counting via `download_dedupe` (INSERT OR IGNORE, count only on insert, skip HEAD/Range, `waitUntil`).
-- [ ] **REG-28** (B-23) Reports: `details` <= 2000 chars; `version` must exist or be `*`; store `sha256(ip + HASH_SALT)` in `reporter_hash`, redact `reporter_ip`.
-- [ ] **REG-42** Daily cron trigger: purge expired sessions, old `download_dedupe` rows (> 2 days) and expired tokens; test the `scheduled` handler.
+- [x] **REG-26** (B-21) Search without N+1 (use `latest_version`); escape `LIKE` with `ESCAPE '\'`; cap `q` at 100 chars; validate `sort`/`category`; exclude prereleases from latest; `/v1/stats` cached 60 s.
+- [x] **REG-27** (B-22) Download: stream the R2 body (no `arrayBuffer`), ETag/`If-None-Match` (304), `immutable` only for active versions, short max-age for yanked; dedupe counting via `download_dedupe` (INSERT OR IGNORE, count only on insert, skip HEAD/Range, `waitUntil`).
+- [x] **REG-28** (B-23) Reports: `details` <= 2000 chars; `version` must exist or be `*`; store `sha256(ip + HASH_SALT)` in `reporter_hash`, redact `reporter_ip`.
+- [x] **REG-42** Daily cron trigger: purge expired sessions, old `download_dedupe` rows (> 2 days) and expired tokens; test the `scheduled` handler.
 
 #### Branch `chore/seed-and-test-hardening`
-- [ ] **REG-29** (B-07) Remove the demo token, fake sha256 values and fake versions from `migrations/seed.sql`; move test data to `tests/fixtures/seed.sql`; add `scripts/dev-seed.*` for local dev (publishes real tarballs through the API); the seed script refuses `--remote` and `ENVIRONMENT=production`. Replace the README curl token with a placeholder.
+- [x] **REG-29** (B-07) Remove the demo token, fake sha256 values and fake versions from `migrations/seed.sql`; move test data to `tests/fixtures/seed.sql`; add `scripts/dev-seed.*` for local dev (publishes real tarballs through the API); the seed script refuses `--remote` and `ENVIRONMENT=production`. Replace the README curl token with a placeholder.
   AC: a test fails if anything under `migrations/` inserts into `api_tokens`.
-- [ ] **REG-30** Regression tests under `tests/security/` for every attack in §6 (scope hijack, reserved names, version forms, ELF/MZ, PAX bypass, hidden dir, junk dependencies, `javascript:` repository, 3 MB SKILL.md, hostile Origin, CORS `*`, token minting, error leak, yank retry, 15 publishes).
+- [x] **REG-30** Regression tests under `tests/security/` for every attack in §6 (scope hijack, reserved names, version forms, ELF/MZ, PAX bypass, hidden dir, junk dependencies, `javascript:` repository, 3 MB SKILL.md, hostile Origin, CORS `*`, token minting, error leak, yank retry, 15 publishes).
 
 #### Branch `test/cli-contract-conformance`
 - [ ] **REG-38** (B-28) `scripts/conformance.mjs` (+ `pnpm conformance`): given `SKILLAPT_CLI_DIR` (a built checkout of the CLI at a tag, default `v1.0.0`), start the Worker locally, create an admin and a normal user plus tokens directly in the LOCAL D1 (fixtures only, never in migrations), then drive the real CLI: init, pack, publish, search, info, install with `--target claude --target antigravity` into a temp project, `--frozen` reinstall, yank twice (stays yanked), outdated, update, admin takedown (-> install gets 410 and refuses), plus crafted attack archives posted with `curl` (ELF, PAX path trick, hidden dir, bad versions, foreign scope).
@@ -424,6 +424,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | audit | (none) | baseline | 29 findings recorded (§6); 59/59 tests on Node; workerd start fails | start REG-01 on `fix/worker-startup-and-config` |
 | 2026-11-15 | agent | docs/plan-reconcile | Step 0 re-baseline | Reconciled PLAN.md with tag v1.1.0, GitHub Actions & Pages workflows, updated wrangler bindings, D-012 (target v1.2.0), and updated task dashboard | merge to main, then start Branch 1 |
 | 2026-11-15 | agent | fix/worker-startup-and-config | REG-37, workflow triggers | Disabled auto-deploy in deploy.yml/pages.yml, implemented test-integration.mjs running 14 real workerd scenarios | merge to main, then start Branch 8 cron |
+| 2026-11-15 | agent | fix/search-download-reports | REG-42 | Implemented daily cron trigger in wrangler.jsonc, exported scheduled handler in src/index.ts, and added unit tests | merge to main, then Branch 10 conformance |
 
 ---
 
