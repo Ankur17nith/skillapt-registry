@@ -2,16 +2,28 @@ name: Deploy Worker
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target Cloudflare environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
-  group: "deploy-production"
+  group: "deploy-${{ github.event.inputs.environment || 'production' }}"
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy to Cloudflare Workers
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    name: Deploy to Cloudflare Workers (${{ github.event.inputs.environment || 'production' }})
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+      url: ${{ (github.event.inputs.environment == 'staging') && 'https://staging-registry.skillapt.dev' || 'https://registry.skillapt.dev' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -34,7 +46,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: deploy --env ${{ github.event.inputs.environment || 'production' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -42,6 +54,6 @@ jobs:
       - name: Inform missing Cloudflare secrets
         if: ${{ env.CLOUDFLARE_API_TOKEN == '' }}
         run: |
-          echo "::notice ::CLOUDFLARE_API_TOKEN is not configured in repository secrets. Worker deployment skipped. To enable automatic deployments, add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to your repository secrets."
+          echo "::notice ::CLOUDFLARE_API_TOKEN is not configured in repository secrets. Worker deployment skipped. To enable deployments, configure CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in environment secrets."
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
