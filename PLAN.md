@@ -59,8 +59,8 @@
 |---|---|
 | Last updated | 2026-11-15 (M5 in progress: REG-43..REG-47 strictness, staging, and operational fixes) |
 | Current milestone | M5: Strictness, staging, and operational fixes (in progress) |
-| Current branch | `main` (starting REG-43) |
-| Current task | REG-43: SKILL.md name strictness |
+| Current branch | `fix/skillmd-name-strict` (merging to `main`) |
+| Current task | REG-43 complete; next REG-44 |
 | Baseline | `tsc` clean; 153/153 vitest tests pass; `pnpm smoke`, `pnpm test:integration` (14 scenarios), `pnpm conformance` (12 CLI + 5 attack scenarios) & `post-deploy-check.sh` pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
@@ -354,7 +354,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 ### M5. Strictness, staging, and operational fixes
 
 #### Branch `fix/skillmd-name-strict`
-- [ ] **REG-43** Require SKILL.md frontmatter `name` to match the on-disk folder name exactly (`scope--name` for scoped packages); reject unscoped name for scoped packages. Test with a package built by the real CLI. Restore D-004 text in §3 so it matches the CLI repo.
+- [x] **REG-43** Require SKILL.md frontmatter `name` to match the on-disk folder name exactly (`scope--name` for scoped packages); reject unscoped name for scoped packages. Test with a package built by the real CLI. Restore D-004 text in §3 so it matches the CLI repo.
 
 #### Branch `fix/deploy-workflow-gating`
 - [ ] **REG-44** Make every deploy workflow manual (`workflow_dispatch`) with a GitHub environment requiring approval; no deploy on push or tag.
@@ -407,7 +407,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | D-001 | 2026-11-15 | Registry and CLI are one product; contract §3 is identical in both repos | accepted |
 | D-002 | 2026-11-15 | `permissions` are declarative, not enforced | accepted |
 | D-003 | 2026-11-15 | No `--` in package names/scopes; on-disk folder for `@scope/name` is `scope--name` | accepted (applied in CLI v1.0.0) |
-| D-004 | 2026-11-15 | SKILL.md `name` must equal the on-disk folder name; files are never rewritten | accepted (applied in CLI v1.0.0) |
+| D-004 | 2026-11-15 | SKILL.md `name` must equal the on-disk folder name (no file rewriting, keeps hashes valid) | accepted (applied in CLI v1.0.0) |
 | D-005 | 2026-11-15 | Agent paths per §3.6 (CLI agent reported verifying Antigravity and Codex against vendor docs) | accepted; human to re-verify before launch |
 | D-006 | (pending) | Allow images/PDF/fonts only with magic-byte-matches-extension | open |
 | D-007 | 2026-11-15 | Admin authorization is role-based (`users.role`), replacing the SPEC's `X-Admin-Token` idea | accepted |
@@ -425,7 +425,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - Q5: Tarball signing/provenance is out of scope for 1.x; confirm.
 - Q6: Any CLI/registry mismatch found by REG-38 that needs a CLI change goes here with details:
   - CLI option `--target`: In `../skillapt/src/cli.ts`, `--target <target>` is registered as a single-value option without a collector (`.option("--target <target>")`). When passed multiple times (e.g. `--target claude --target antigravity`), Commander overwrites `options.target` with the last value ("antigravity"). In contrast, `../skillapt/src/commands/install.ts` supports comma-separated targets via `options.target.split(",")`. Conformance tests used `--target claude,antigravity` which succeeds. To allow repeated `--target` flags, CLI `src/cli.ts` should define `--target` with a custom collector or variadic argument.
-  - SKILL.md Frontmatter naming: Scoped packages use `scope--name` for their on-disk directory name per D-004. Registry's `src/validation/tar.ts` was conformed to accept `scope--name` as well as unscoped name, aligning with CLI v1.0.0.
+  - SKILL.md Frontmatter naming: Scoped packages use `scope--name` for their on-disk directory name per D-004. Enforced strictly in REG-43: SKILL.md frontmatter name must match `scope--name` exactly; unscoped names are strictly rejected, matching CLI validation.
 - Q7 (Reconciled State / Human Decisions):
   - `wrangler.jsonc`:
     - Production `database_id` is `"00000000-0000-0000-0000-000000000000"`. Human needs to run `wrangler d1 create skillapt-db-prod` and supply real UUID before production deployment.
@@ -448,6 +448,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | agent | test/cli-contract-conformance | REG-38 | Implemented scripts/conformance.mjs and pnpm conformance; verified all 12 CLI scenarios (doctor, search, init, pack, publish, info, install, --frozen, yank, un-yank, outdated/update, takedown refusal) and 5 attack tarballs pass | merge to main, then Branch 11 docs/ci-spec-sync |
 | 2026-11-15 | agent | docs/ci-spec-sync | REG-31, REG-32, REG-33 | Updated ci.yml (test:integration, wrangler deploy --env production, conformance job), synced SPEC.md, openapi.yaml, README.md (vars, secrets, dashboard flow), SECURITY.md, and CHANGELOG.md | merge to main, then Branch 12 chore/production-deploy |
 | 2026-11-15 | agent | chore/production-deploy | REG-34, REG-39 | Created docs/DEPLOY.md, scripts/post-deploy-check.sh, and docs/RUNBOOK.md; updated REGISTRY_VERSION to 1.2.0; verified post-deploy-check passes locally | merge to main; human runs REG-35 and REG-36 |
+| 2026-11-15 | agent | fix/skillmd-name-strict | REG-43 | Strictly enforced SKILL.md frontmatter name must match package on-disk name (scope--name for scoped packages, unscoped name rejected); added regression tests & real CLI pack publish test | merge to main, start Branch fix/deploy-workflow-gating |
 | 2026-11-15 | agent | main | Final Verification | Verified git status, branch tracking, remote heads, graph log, merged branches, zero diff between main and origin/main, and all test suites pass | ready for human production deployment and acceptance demo |
 
 ### 13.1 Post-Merge Git State Verification

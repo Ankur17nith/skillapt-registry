@@ -65,7 +65,7 @@ describe("Security: Comprehensive Regression Invariants", () => {
       compatibility: ["claude"],
       permissions: { network: false, shell: false, filesystem: "none" }
     };
-    const skillMd = `---\nname: ${name.startsWith("@") ? name.split("/")[1] : name}\ndescription: A secure regression test package.\n---\n# ${name}`;
+    const skillMd = `---\nname: ${name.startsWith("@") ? name.slice(1).replace("/", "--") : name}\ndescription: A secure regression test package.\n---\n# ${name}`;
 
     return buildTarGz([
       { path: "skill.json", content: JSON.stringify(manifest) },

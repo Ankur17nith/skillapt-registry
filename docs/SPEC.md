@@ -64,7 +64,7 @@ Every skill package is distributed as a gzip-compressed tar archive (`.tar.gz` o
 `SKILL.md` is the primary interface between the package and the consuming AI agent. It **MUST** begin with valid YAML frontmatter demarcated by triple dashes (`---`).
 
 - **Required Frontmatter Keys**:
-  - `name`: Must match the **unscoped** package name specified in `skill.json` (or the flat on-disk folder name `scope--name` for scoped packages per D-004; e.g. for package `@alice/pdf-tool`, frontmatter `name` can be `pdf-tool` or `alice--pdf-tool`).
+  - `name`: Must match the on-disk folder name specified in `skill.json` (`name` for unscoped packages, `scope--name` for scoped packages per D-004; e.g. for package `@alice/pdf-tool`, frontmatter `name` MUST be `alice--pdf-tool`; unscoped names for scoped packages are strictly rejected).
   - `description`: A clear, single-sentence summary of what the skill enables for the agent.
 - **Content Limits**:
   - Minimum size: 10 non-whitespace characters.

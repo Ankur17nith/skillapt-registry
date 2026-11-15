@@ -605,13 +605,13 @@ export async function inspectAndValidateTarball(
   const manifest = manifestValidation.data;
 
   // Validate SKILL.md frontmatter fields against manifest
-  // Per D-004 & §3.4: On-disk folder name: unscoped name -> name; scoped @scope/name -> scope--name
+  // Per D-004 & §3.4: On-disk folder name: unscoped name -> name; scoped @scope/name -> scope--name.
+  // SKILL.md frontmatter name must match the on-disk folder name exactly. Unscoped names for scoped packages are rejected.
   const expectedDiskName = manifest.name.startsWith("@")
     ? manifest.name.slice(1).replace("/", "--")
     : manifest.name;
-  const unscopedName = manifest.name.includes("/") ? manifest.name.split("/")[1] : manifest.name;
 
-  if (parsedFrontmatter.name !== expectedDiskName && parsedFrontmatter.name !== unscopedName) {
+  if (parsedFrontmatter.name !== expectedDiskName) {
     return {
       success: false,
       error: `SKILL.md frontmatter name '${parsedFrontmatter.name}' must match unscoped package name '${expectedDiskName}'.`
