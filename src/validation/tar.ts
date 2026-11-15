@@ -253,7 +253,16 @@ export async function inspectAndValidateTarball(
         pendingPaxPath = paxRecords.get("path")!;
       }
       if (paxRecords.has("size")) {
-        pendingPaxSize = parseInt(paxRecords.get("size")!, 10);
+        const rawPaxSize = paxRecords.get("size")!;
+        // Strict decimal integer only: anything else would let validators and
+        // extractors disagree about where the next header starts.
+        if (!/^\d{1,15}$/.test(rawPaxSize)) {
+          return {
+            success: false,
+            error: `Invalid PAX size record '${rawPaxSize}': must be a non-negative decimal integer.`
+          };
+        }
+        pendingPaxSize = Number(rawPaxSize);
       }
       continue;
     }
@@ -296,8 +305,19 @@ export async function inspectAndValidateTarball(
     pendingPaxPath = null;
     pendingPaxSize = null;
 
+    // The data region is governed by the EFFECTIVE size (a PAX 'size' record
+    // overrides the header field). Advancing by the header size instead would
+    // let an attacker hide entries from this validator that real extractors see.
+    const dataBlockBytes = Math.ceil(effectiveSize / 512) * 512;
+    if (offset + effectiveSize > tarBytes.length) {
+      return {
+        success: false,
+        error: "Archive is truncated: an entry's declared size exceeds the end of the archive."
+      };
+    }
+
     if (!effectivePath) {
-      offset += Math.ceil(rawSize / 512) * 512;
+      offset += dataBlockBytes;
       continue;
     }
 
@@ -409,7 +429,7 @@ export async function inspectAndValidateTarball(
     }
 
     if (isDirEntry) {
-      offset += Math.ceil(rawSize / 512) * 512;
+      offset += dataBlockBytes;
       continue;
     }
 
@@ -424,7 +444,7 @@ export async function inspectAndValidateTarball(
 
     // Extract payload
     const fileData = tarBytes.subarray(offset, offset + effectiveSize);
-    offset += Math.ceil(rawSize / 512) * 512;
+    offset += dataBlockBytes;
 
     // Check allowlist first
     const leafName = segments[segments.length - 1];
