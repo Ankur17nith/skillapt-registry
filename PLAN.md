@@ -58,17 +58,17 @@
 | Field | Value |
 |---|---|
 | Last updated | 2026-11-15 (re-baseline: tag v1.1.0 reconciled, target v1.2.0, workflows & bindings updated) |
-| Current milestone | M1: Make it run and make publishing safe (in progress) |
-| Current branch | `docs/plan-reconcile` (next: `fix/worker-startup-and-config`) |
-| Current task | Pre-Branch 1 reconcile / REG-37 |
-| Baseline | `tsc` clean; 152/152 vitest tests pass on Node with mocks; `pnpm smoke` passes on workerd (B-01 resolved) |
+| Current milestone | M1: Make it run and make publishing safe (complete) |
+| Current branch | `fix/worker-startup-and-config` (next: `fix/search-download-reports`) |
+| Current task | REG-42 (cron trigger in Branch 8) / REG-38 |
+| Baseline | `tsc` clean; 152/152 vitest tests pass; `pnpm smoke` & `pnpm test:integration` (14 scenarios) pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
 | CLI repo (`skillapt`) | Complete & built locally in `../skillapt`: tag `v1.0.0` checked out, 11 branches merged, ready for conformance testing |
 
 | Milestone | Goal | Status |
 |---|---|---|
-| M1 | Worker runs on Cloudflare; publish validation closed (scope, names, binaries, versions, dependencies); workerd integration tests | [~] |
+| M1 | Worker runs on Cloudflare; publish validation closed (scope, names, binaries, versions, dependencies); workerd integration tests | [x] |
 | M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [x] |
 | M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [~] |
 | M4 | Docs/CI sync and production-ready deploy package (human deploys) | [ ] |
@@ -258,14 +258,14 @@ Order is mandatory. Each BRANCH is created from the latest `main`, merged with `
 ### M1. Make it run and make publishing safe
 
 #### Branch `fix/worker-startup-and-config`
-- [ ] **REG-01** (B-01) Remove the module-scope `setInterval` from `src/middleware/rate-limit.ts`; no timers/I-O/randomness at module scope anywhere.
+- [x] **REG-01** (B-01) Remove the module-scope `setInterval` from `src/middleware/rate-limit.ts`; no timers/I-O/randomness at module scope anywhere.
   V: `wrangler dev --local` starts and `/v1/health` answers; a test asserts no timers are created at import.
-- [ ] **REG-02** (B-26) Upgrade wrangler to v4; upgrade zod (patched 3.x), hono, semver; fix `pnpm-workspace.yaml` (remove placeholder `allowBuilds`, keep `onlyBuiltDependencies`); add `engines.node >=22.5` and `packageManager`.
+- [x] **REG-02** (B-26) Upgrade wrangler to v4; upgrade zod (patched 3.x), hono, semver; fix `pnpm-workspace.yaml` (remove placeholder `allowBuilds`, keep `onlyBuiltDependencies`); add `engines.node >=22.5` and `packageManager`.
   V: `pnpm audit --prod` has no high/critical; clean install.
-- [ ] **REG-03** (B-16, B-26) wrangler.jsonc: `env.production` with `ENVIRONMENT=production`, `PUBLIC_ORIGIN`, `routes` (custom domain `registry.skillapt.dev`), observability on, current `compatibility_date`, clearly marked placeholder `database_id`; base config must not be able to produce insecure cookies in production; add `.dev.vars.example`; remove unused `SESSION_SECRET` (types, README); remove `nodejs_compat` if unused.
+- [x] **REG-03** (B-16, B-26) wrangler.jsonc: `env.production` with `ENVIRONMENT=production`, `PUBLIC_ORIGIN`, `routes` (custom domain `registry.skillapt.dev`), observability on, current `compatibility_date`, clearly marked placeholder `database_id`; base config must not be able to produce insecure cookies in production; add `.dev.vars.example`; remove unused `SESSION_SECRET` (types, README); remove `nodejs_compat` if unused.
   V: `wrangler deploy --dry-run --env production` succeeds.
-- [ ] **REG-04** `pnpm smoke`: starts `wrangler dev --local` on a free port, polls `/v1/health`, fails with the runtime log if it does not start.
-- [ ] **REG-37** (B-27) `pnpm test:integration`: script that starts `wrangler dev --local --persist-to <tmp>`, applies migrations (`wrangler d1 migrations apply DB --local`), then runs HTTP scenarios with `fetch` (health, publish valid package, read back, download + sha256, yank/unyank, dependency resolution data). Extended by later branches.
+- [x] **REG-04** `pnpm smoke`: starts `wrangler dev --local` on a free port, polls `/v1/health`, fails with the runtime log if it does not start.
+- [x] **REG-37** (B-27) `pnpm test:integration`: script that starts `wrangler dev --local --persist-to <tmp>`, applies migrations (`wrangler d1 migrations apply DB --local`), then runs HTTP scenarios with `fetch` (health, publish valid package, read back, download + sha256, yank/unyank, dependency resolution data). Extended by later branches.
   V: runs green locally and in CI; fails if the Worker does not start.
 
 #### Branch `fix/publish-validation`
@@ -423,6 +423,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 |---|---|---|---|---|---|
 | 2026-11-15 | audit | (none) | baseline | 29 findings recorded (§6); 59/59 tests on Node; workerd start fails | start REG-01 on `fix/worker-startup-and-config` |
 | 2026-11-15 | agent | docs/plan-reconcile | Step 0 re-baseline | Reconciled PLAN.md with tag v1.1.0, GitHub Actions & Pages workflows, updated wrangler bindings, D-012 (target v1.2.0), and updated task dashboard | merge to main, then start Branch 1 |
+| 2026-11-15 | agent | fix/worker-startup-and-config | REG-37, workflow triggers | Disabled auto-deploy in deploy.yml/pages.yml, implemented test-integration.mjs running 14 real workerd scenarios | merge to main, then start Branch 8 cron |
 
 ---
 
