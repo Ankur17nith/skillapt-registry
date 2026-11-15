@@ -68,23 +68,53 @@ curl -X POST "https://registry.skillapt.dev/v1/admin/skills/@author%2Fskill-name
 ## 2. Disaster Recovery & Backups
 
 ### 2.1 Database (D1) Backups & Restores
-D1 automatically provides point-in-time recovery and snapshot replication. For manual cold backups:
+D1 automatically provides snapshot replication and point-in-time recovery on Workers Paid plans. For manual cold backups, disaster recovery, pre-migration snapshots, or compliance archives:
 
-- **Export D1 Database**:
-  ```bash
-  # Recommended: Run weekly or prior to major upgrades
-  npx wrangler d1 export skillapt-db-prod --remote --output="./backup-$(date +%Y%m%d).sql"
-  ```
-- **Restore D1 Database**:
-  ```bash
-  # To restore to a fresh database or disaster recovery instance:
-  npx wrangler d1 execute skillapt-db-prod --remote --file="./backup-20261115.sql"
-  ```
+#### Manual Export Procedure
+Run `wrangler d1 export` to generate a self-contained SQL dump including table schemas and all rows:
+```bash
+# Recommended schedule: Daily or immediately prior to applying any D1 schema migration
+BACKUP_DIR="./backups"
+mkdir -p "${BACKUP_DIR}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-### 2.2 Tarball Storage (R2) Protection
-- **Object Immutability**: The registry enforces create-only writes (`onlyIf: { etagDoesNotMatch: "*" }`).
-- **Bucket Versioning**: Enable Object Versioning on the R2 bucket `skillapt-packages` in the Cloudflare Dashboard (**R2** -> **Buckets** -> **skillapt-packages** -> **Settings** -> **Object Versioning** -> **Enable**). This protects against accidental administrative deletions.
-- **Cross-Region Replication**: Optional: configure replication to a secondary Cloudflare jurisdiction for mission-critical enterprise resilience.
+# Export production D1 database
+BACKUP_FILE="${BACKUP_DIR}/skillapt-db-prod-${TIMESTAMP}.sql"
+npx wrangler d1 export skillapt-db-prod --remote --output="${BACKUP_FILE}"
+
+# (Optional) Export staging D1 database
+# npx wrangler d1 export skillapt-db-staging --remote --output="${BACKUP_DIR}/skillapt-db-staging-${TIMESTAMP}.sql"
+
+# Verify export integrity
+head -n 25 "${BACKUP_FILE}"
+ls -lh "${BACKUP_FILE}"
+```
+
+#### Database Restore Procedure
+To restore a snapshot to a target D1 database (disaster recovery or sandbox testing):
+```bash
+# 1. Execute SQL dump against target D1 database
+npx wrangler d1 execute skillapt-db-prod --remote --file="${BACKUP_FILE}"
+
+# 2. Verify table records and latest versions
+npx wrangler d1 execute skillapt-db-prod --remote --command \
+  "SELECT count(*) AS total_skills FROM skills; SELECT count(*) AS total_versions FROM skill_versions;"
+```
+
+### 2.2 Tarball Storage (R2) Protection & Periodic Backup
+> [!NOTE]
+> Cloudflare R2 does not natively support S3-style object versioning. The registry protects tarball assets through application-level immutability and periodic backup strategies.
+
+- **Object Immutability**: The registry strictly enforces create-only writes (`onlyIf: { etagDoesNotMatch: "*" }`), mathematically preventing overwriting any existing version of a package.
+- **Accidental Deletion & Disaster Protection**:
+  1. **Soft Takedowns**: Administrative removals in `skillapt-registry` are soft-deletions recorded in D1 (`status = 'removed'`, returning `410 Gone`). The Worker API never issues `DELETE` requests to R2 for published packages.
+  2. **Access Control / Least Privilege**: Configure production Cloudflare API tokens with `Object Read & Write` permissions only; do not grant `Bucket Delete` or `Object Delete` permissions to Worker execution roles.
+  3. **Periodic Backup Copy**: To maintain an independent off-site or cross-bucket cold backup, run a daily sync to a secondary backup bucket or external S3-compatible cold storage:
+     ```bash
+     # Example: Periodic sync using rclone or AWS CLI with R2 S3 endpoint
+     rclone sync cloudflare:skillapt-packages cloudflare:skillapt-packages-backup
+     ```
+     Alternatively, use Cloudflare Super Slurper or an automated scheduled Cloudflare Worker to replicate newly created tarballs into `skillapt-packages-backup`.
 
 ### 2.3 Worker Deployment Rollback
 If a newly deployed Worker script introduces a regression or instability:
