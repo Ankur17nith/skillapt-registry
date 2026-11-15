@@ -126,4 +126,42 @@ app.route("/dashboard", dashboardRouter);
 
 export { RateLimiterDO } from "./rate-limiter/do";
 
-export default app;
+export async function handleScheduled(
+  _event: { cron?: string; scheduledTime?: number },
+  env: Env,
+  _ctx?: ExecutionContext
+): Promise<{ purgedSessions: number; purgedDedupe: number; purgedTokens: number }> {
+  const now = new Date().toISOString();
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  // 1. Purge expired sessions
+  const sessionRes = await env.DB.prepare(
+    "DELETE FROM sessions WHERE datetime(expires_at) < datetime(?)"
+  ).bind(now).run();
+  const purgedSessions = sessionRes.meta?.changes ?? 0;
+
+  // 2. Purge old download_dedupe rows older than 2 days
+  const dedupeRes = await env.DB.prepare(
+    "DELETE FROM download_dedupe WHERE day < ?"
+  ).bind(twoDaysAgo).run();
+  const purgedDedupe = dedupeRes.meta?.changes ?? 0;
+
+  // 3. Purge expired tokens
+  const tokenRes = await env.DB.prepare(
+    "DELETE FROM api_tokens WHERE expires_at IS NOT NULL AND datetime(expires_at) < datetime(?)"
+  ).bind(now).run();
+  const purgedTokens = tokenRes.meta?.changes ?? 0;
+
+  return { purgedSessions, purgedDedupe, purgedTokens };
+}
+
+export default {
+  fetch: app.fetch,
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    await handleScheduled(
+      { cron: controller.cron, scheduledTime: controller.scheduledTime },
+      env,
+      ctx
+    );
+  }
+};

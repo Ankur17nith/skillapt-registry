@@ -35,6 +35,9 @@
       "new_sqlite_classes": ["RateLimiterDO"]
     }
   ],
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  },
   "workers_dev": true,
   "env": {
     "production": {
