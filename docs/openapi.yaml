@@ -7,8 +7,8 @@ info:
     Skillapt is an independent package registry built for discovering, publishing, and
     managing immutable skill packages for AI agents (Claude, Cursor, Codex, Antigravity, etc.).
 servers:
-  - url: https://registry.skillapt.dev/v1
-    description: Production Registry
+  - url: https://skillapt-registry.example-subdomain.workers.dev/v1
+    description: Your deployed registry (placeholder workers.dev address; replace with your own)
   - url: http://localhost:8787/v1
     description: Local Development Server
 
@@ -180,7 +180,7 @@ paths:
                   tarballUrl:
                     type: string
                     format: uri
-                    example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                    example: https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
                   message:
                     type: string
                     example: Successfully published pdf-summarizer@1.2.0
@@ -236,7 +236,7 @@ paths:
                         integrity: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                         sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                         size: 14250
-                        tarballUrl: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                        tarballUrl: https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
                         dependencies:
                           text-cleaner: ^1.0.0
                         publishedAt: "2026-11-01T12:00:00Z"
@@ -285,7 +285,7 @@ paths:
                     integrity: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                     sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                     size: 14250
-                    tarballUrl: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                    tarballUrl: https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
                     dependencies:
                       text-cleaner: ^1.0.0
                     publishedAt: "2026-11-01T12:00:00Z"
@@ -876,7 +876,7 @@ paths:
             Set-Cookie:
               schema:
                 type: string
-                example: skillapt_session=...; Domain=.skillapt.dev; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000
+                example: skillapt_session=...; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000
             Location:
               schema:
                 type: string
@@ -1135,7 +1135,7 @@ components:
               resolved:
                 type: string
                 format: uri
-                example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+                example: https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
               integrity:
                 type: string
                 example: sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -1278,7 +1278,7 @@ components:
         tarballUrl:
           type: string
           format: uri
-          example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+          example: https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
         dependencies:
           type: object
           additionalProperties:
@@ -1399,7 +1399,7 @@ components:
         tarballUrl:
           type: string
           format: uri
-          example: https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
+          example: https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz
         dependencies:
           type: object
           additionalProperties:

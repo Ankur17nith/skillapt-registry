@@ -236,7 +236,7 @@ The lockfile guarantees deterministic, reproducible installations across develop
   "skills": {
     "pdf-summarizer": {
       "version": "1.2.0",
-      "resolved": "https://registry.skillapt.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz",
+      "resolved": "https://skillapt-registry.example-subdomain.workers.dev/v1/skills/pdf-summarizer/-/1.2.0.tgz",
       "integrity": "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "category": "documents",
@@ -251,7 +251,7 @@ The lockfile guarantees deterministic, reproducible installations across develop
     },
     "text-cleaner": {
       "version": "1.0.2",
-      "resolved": "https://registry.skillapt.dev/v1/skills/text-cleaner/-/1.0.2.tgz",
+      "resolved": "https://skillapt-registry.example-subdomain.workers.dev/v1/skills/text-cleaner/-/1.0.2.tgz",
       "integrity": "sha256-7d8312d8a427f71b9e0787389278918237abc091823481298471209348123049",
       "sha256": "7d8312d8a427f71b9e0787389278918237abc091823481298471209348123049",
       "category": "data",
@@ -406,7 +406,7 @@ Download metrics are deduplicated daily per IP hash to provide accurate populari
 Web sessions created via GitHub OAuth utilize hardened cookie security:
 - **Cookie Attributes**:
   - `Name`: `skillapt_session`
-  - `Domain`: `.<our-domain>` (e.g. `.skillapt.dev` in production)
+  - `Domain`: omitted (host-only cookie bound to the registry origin)
   - `HttpOnly`: `true` (inaccessible to clientside scripts)
   - `Secure`: `true` (enforced in production)
   - `SameSite`: `Lax`
@@ -422,7 +422,7 @@ Because browsers automatically attach session cookies to requests:
 - API Bearer tokens (`apt_live_...`) are exempt from CSRF Origin checks because browsers do not attach Bearer headers automatically.
 
 ### 11.3 Strict CORS Policy
-- Allowed origins are restricted strictly to configured web domains (e.g. `https://skillapt.dev`).
+- Allowed origins are restricted strictly to configured web domains (e.g. the Cloudflare Pages origin `https://skillapt-web.pages.dev`).
 - **Never Wildcard with Credentials**: The header `Access-Control-Allow-Origin: *` is strictly forbidden when credentials are enabled.
 - Localhost origins are forbidden when `ENVIRONMENT=production`.
 - Responses include `Vary: Origin`.

@@ -13,8 +13,8 @@ Admins can remove the offending version immediately via the admin API.
 
 Using the Admin API:
 ```bash
-# Obtain your admin token from https://registry.skillapt.dev/dashboard
-curl -X POST "https://registry.skillapt.dev/v1/admin/skills/@attacker%2Fmalicious-skill/1.0.0/takedown" \
+# Obtain your admin token from https://<your-worker>.workers.dev/dashboard
+curl -X POST "https://<your-worker>.workers.dev/v1/admin/skills/@attacker%2Fmalicious-skill/1.0.0/takedown" \
   -H "Authorization: Bearer <ADMIN_API_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -25,18 +25,18 @@ curl -X POST "https://registry.skillapt.dev/v1/admin/skills/@attacker%2Fmaliciou
 
 Emergency Direct D1 Procedure (if API is unreachable):
 ```bash
-npx wrangler d1 execute DB --remote --env production --command \
+npx wrangler d1 execute DB --remote --command \
   "UPDATE skill_versions SET status = 'removed', removal_reason = 'Admin Takedown: Malware report rep_12345', removed_at = datetime('now') WHERE skill_name = '@attacker/malicious-skill' AND version = '1.0.0';"
 ```
 
 ### Step 2: Verify Removal & 410 Gone Status
 Confirm that package downloads now return HTTP `410 Gone` with `Cache-Control: no-store`:
 ```bash
-curl -i "https://registry.skillapt.dev/v1/skills/@attacker%2Fmalicious-skill/-/1.0.0.tgz"
+curl -i "https://<your-worker>.workers.dev/v1/skills/@attacker%2Fmalicious-skill/-/1.0.0.tgz"
 # Expected response:
 # HTTP/2 410
 # cache-control: no-store
-# {"error":{"code":"PACKAGE_REMOVED","message":"Version '1.0.0' of skill '@attacker/malicious-skill' has been removed by administrators.","removalReason":"..."}}
+# {"error":{"code":"GONE","message":"Version '1.0.0' of skill '@attacker/malicious-skill' has been removed by administrators.","removalReason":"..."}}
 ```
 
 Verify the CLI refuses to install the package:
@@ -48,8 +48,8 @@ skillapt install @attacker/malicious-skill@1.0.0
 ### Step 3: Verify Audit Log Record
 Every administrative takedown writes an immutable audit record:
 ```bash
-npx wrangler d1 execute DB --remote --env production --command \
-  "SELECT id, action, target, actor_id, details, created_at FROM audit_log ORDER BY created_at DESC LIMIT 5;"
+npx wrangler d1 execute DB --remote --command \
+  "SELECT id, action, target, actor_id, detail, created_at FROM audit_log ORDER BY created_at DESC LIMIT 5;"
 ```
 
 ### Step 4: Community Disclosure & Postmortem
@@ -59,7 +59,7 @@ npx wrangler d1 execute DB --remote --env production --command \
 ### Step 5: Restoration (If Taken Down in Error)
 If a takedown was resolved or determined to be a false positive:
 ```bash
-curl -X POST "https://registry.skillapt.dev/v1/admin/skills/@author%2Fskill-name/1.0.0/restore" \
+curl -X POST "https://<your-worker>.workers.dev/v1/admin/skills/@author%2Fskill-name/1.0.0/restore" \
   -H "Authorization: Bearer <ADMIN_API_TOKEN>"
 ```
 
@@ -68,7 +68,7 @@ curl -X POST "https://registry.skillapt.dev/v1/admin/skills/@author%2Fskill-name
 ## 2. Disaster Recovery & Backups
 
 ### 2.1 Database (D1) Backups & Restores
-D1 automatically provides snapshot replication and point-in-time recovery on Workers Paid plans. For manual cold backups, disaster recovery, pre-migration snapshots, or compliance archives:
+D1 provides Time Travel point-in-time recovery (30 days on the free plan; see `npx wrangler d1 time-travel --help`). For manual cold backups, disaster recovery, pre-migration snapshots, or compliance archives:
 
 #### Manual Export Procedure
 Run `wrangler d1 export` to generate a self-contained SQL dump including table schemas and all rows:
@@ -79,11 +79,8 @@ mkdir -p "${BACKUP_DIR}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Export production D1 database
-BACKUP_FILE="${BACKUP_DIR}/skillapt-db-prod-${TIMESTAMP}.sql"
-npx wrangler d1 export skillapt-db-prod --remote --output="${BACKUP_FILE}"
-
-# (Optional) Export staging D1 database
-# npx wrangler d1 export skillapt-db-staging --remote --output="${BACKUP_DIR}/skillapt-db-staging-${TIMESTAMP}.sql"
+BACKUP_FILE="${BACKUP_DIR}/skillapt-db-${TIMESTAMP}.sql"
+npx wrangler d1 export skillapt-db --remote --output="${BACKUP_FILE}"
 
 # Verify export integrity
 head -n 25 "${BACKUP_FILE}"
@@ -94,10 +91,10 @@ ls -lh "${BACKUP_FILE}"
 To restore a snapshot to a target D1 database (disaster recovery or sandbox testing):
 ```bash
 # 1. Execute SQL dump against target D1 database
-npx wrangler d1 execute skillapt-db-prod --remote --file="${BACKUP_FILE}"
+npx wrangler d1 execute skillapt-db --remote --file="${BACKUP_FILE}"
 
 # 2. Verify table records and latest versions
-npx wrangler d1 execute skillapt-db-prod --remote --command \
+npx wrangler d1 execute skillapt-db --remote --command \
   "SELECT count(*) AS total_skills FROM skills; SELECT count(*) AS total_versions FROM skill_versions;"
 ```
 
@@ -120,10 +117,10 @@ npx wrangler d1 execute skillapt-db-prod --remote --command \
 If a newly deployed Worker script introduces a regression or instability:
 ```bash
 # View deployment history
-npx wrangler deployments list --env production
+npx wrangler deployments list
 
 # Instantly rollback to previous active deployment
-npx wrangler rollback --env production
+npx wrangler rollback
 ```
 
 ---
@@ -136,28 +133,28 @@ To rotate GitHub OAuth credentials with zero user downtime:
 2. Under **Client secrets**, click **Generate a new client secret**. Both secrets will remain valid during transition.
 3. Update production secret:
    ```bash
-   npx wrangler secret put GITHUB_CLIENT_SECRET --env production
+   npx wrangler secret put GITHUB_CLIENT_SECRET
    ```
-4. Test login at `https://registry.skillapt.dev/v1/auth/github`.
+4. Test login at `https://<your-worker>.workers.dev/v1/auth/github`.
 5. Once verified, return to GitHub OAuth settings and delete the old client secret.
 
 ### 3.2 HASH_SALT Rotation
 `HASH_SALT` is used to salt client IP addresses before hashing for download deduplication and abuse report reporter tracking.
 - **Rotation Impact**:
-  - Existing lifetime download metrics (`download_count` in `skill_versions`) are permanently stored as integers and **unaffected**.
+  - Lifetime download totals (`downloads` in `skills`) are stored as integers and **unaffected**.
   - Daily download deduplication (`download_dedupe`) resets for the current day.
 - **Rotation Command**:
   ```bash
   NEW_SALT=$(openssl rand -hex 32)
-  echo "${NEW_SALT}" | npx wrangler secret put HASH_SALT --env production
+  echo "${NEW_SALT}" | npx wrangler secret put HASH_SALT
   ```
 
 ### 3.3 Emergency API Token Revocation
 If a publisher's API token is leaked:
-- **By Publisher**: Go to `https://registry.skillapt.dev/dashboard` and click **Revoke** next to the compromised token.
+- **By Publisher**: Go to `https://<your-worker>.workers.dev/dashboard` and click **Revoke** next to the compromised token.
 - **By Admin (Emergency SQL)**:
   ```bash
-  npx wrangler d1 execute DB --remote --env production --command \
+  npx wrangler d1 execute DB --remote --command \
     "DELETE FROM api_tokens WHERE user_id = (SELECT id FROM users WHERE handle = '<user-handle>');"
   ```
 
@@ -168,11 +165,11 @@ If a publisher's API token is leaked:
 ### 4.1 Live Log Tailing
 Tail real-time requests and errors:
 ```bash
-npx wrangler tail --env production
+npx wrangler tail
 ```
 Format structured output with `jq`:
 ```bash
-npx wrangler tail --env production --format json | jq -r 'select(.outcome != "ok") | [.eventTimestamp, .outcome, .scriptName, .exceptions] | @tsv'
+npx wrangler tail --format json | jq -r 'select(.outcome != "ok") | [.eventTimestamp, .outcome, .scriptName, .exceptions] | @tsv'
 ```
 
 ### 4.2 Key Health Metrics & Alerting Thresholds
@@ -189,17 +186,18 @@ Monitor the following metrics in Cloudflare Workers Analytics:
 If urgent database maintenance or schema refactoring is required and writes must be rejected while keeping searches and downloads online:
 
 ### Option A: Read-Only Maintenance via Worker Configuration
-In `wrangler.jsonc`, set under `env.production.vars`:
+In `wrangler.jsonc`, add `MAINTENANCE_MODE` to the top-level `vars` block:
 ```jsonc
 "vars": {
+  "ENVIRONMENT": "production",
   "MAINTENANCE_MODE": "true"
 }
 ```
 Deploy the update:
 ```bash
-npx wrangler deploy --env production
+npx wrangler deploy
 ```
-In this mode, all mutating routes (`POST /v1/skills`, `POST /v1/tokens`, `POST /v1/skills/:name/:version/yank`) return HTTP `503 Service Unavailable` with message: `"Registry is in scheduled read-only maintenance mode."`
+In this mode, every mutating request (any `POST`, `PUT`, `PATCH` or `DELETE` under `/v1` and `/dashboard`, except logout) returns HTTP `503 Service Unavailable` with error code `MAINTENANCE` and a `Retry-After` header. Searches, downloads and health checks keep working. Remove the variable (or set it to anything other than `"true"`) and redeploy to resume writes.
 
 ### Option B: Cloudflare WAF Managed Rule (Zero Code Deploy)
 1. Open Cloudflare Dashboard -> **Security** -> **WAF** -> **Custom Rules**.
