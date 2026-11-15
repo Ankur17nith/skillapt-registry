@@ -88,7 +88,7 @@ Documentation content.`;
         name: "@alexdev/pdf-tools"
       };
       const skillMd = `---
-name: pdf-tools
+name: alexdev--pdf-tools
 description: Hijacked package
 ---
 # Content`;
@@ -114,7 +114,7 @@ description: Hijacked package
         name: "@anthropic/helper"
       };
       const skillMd = `---
-name: helper
+name: anthropic--helper
 description: Impersonating anthropic
 ---
 # Content`;
@@ -194,7 +194,7 @@ description: Impersonating admin
         name: "@alexdev/admin"
       };
       const skillMd = `---
-name: admin
+name: alexdev--admin
 description: Tool under reserved name
 ---
 # Tool`;
@@ -547,6 +547,33 @@ description: Name does not match manifest
       expect(res.status).toBe(400);
       const data = await res.json() as any;
       expect(data.error.message).toContain("must match unscoped package name");
+    });
+
+    it("rejects scoped package with unscoped SKILL.md frontmatter name with 400", async () => {
+      const manifest = {
+        ...baseValidManifest,
+        name: "@alexdev/pdf-tools"
+      };
+      // For @alexdev/pdf-tools, frontmatter name must be alexdev--pdf-tools, not pdf-tools
+      const unscopedSkillMd = `---
+name: pdf-tools
+description: Unscoped name in scoped package
+---
+# Content`;
+      const tarGz = makePayload(manifest, unscopedSkillMd);
+
+      const res = await app.request("/v1/skills", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${alexToken}`,
+          "Content-Type": "application/gzip"
+        },
+        body: tarGz
+      }, env);
+
+      expect(res.status).toBe(400);
+      const data = await res.json() as any;
+      expect(data.error.message).toContain("must match unscoped package name 'alexdev--pdf-tools'");
     });
 
     it("rejects SKILL.md with empty frontmatter description with 400", async () => {

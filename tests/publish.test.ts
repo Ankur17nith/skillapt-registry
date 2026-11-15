@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 import { app } from "../src/index";
 import { MockD1Database } from "./helpers/mock-d1";
 import { MockR2Bucket } from "./helpers/mock-r2";
@@ -280,5 +284,72 @@ Automates tests for AI agents.`;
     expect(res.status).toBe(400);
     const body = await res.json() as any;
     expect(body.error.code).toBe("INVALID_PACKAGE");
+  });
+
+  it("publishes a scoped package built by the real CLI with scope--name frontmatter", async () => {
+    const candidatePaths = [
+      process.env.SKILLAPT_CLI_DIR ? path.join(process.env.SKILLAPT_CLI_DIR, "dist/cli.js") : null,
+      path.resolve(process.cwd(), "../skillapt/dist/cli.js"),
+      path.resolve(process.cwd(), "skillapt/dist/cli.js")
+    ].filter(Boolean) as string[];
+
+    const cliPath = candidatePaths.find((p) => fs.existsSync(p));
+    if (!cliPath) {
+      console.log("Skipping real CLI pack test: CLI not found");
+      return;
+    }
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cli-pack-test-"));
+    try {
+      await mockDb.prepare(
+        "INSERT OR REPLACE INTO scopes (scope, owner_id, github_id, created_at) VALUES (?, ?, ?, ?)"
+      ).bind("alexdev", "usr_alexdev", 10101, new Date().toISOString()).run();
+
+      const manifest = {
+        name: "@alexdev/cli-built-pkg",
+        version: "1.0.0",
+        description: "Package built by real CLI with strict scope--name",
+        license: "MIT",
+        category: "devtools",
+        compatibility: ["claude"],
+        permissions: { network: false, shell: false, filesystem: "none" }
+      };
+      fs.writeFileSync(path.join(tmpDir, "skill.json"), JSON.stringify(manifest, null, 2));
+      const skillMd = `---
+name: alexdev--cli-built-pkg
+description: Package built by real CLI with strict scope--name
+---
+# Content`;
+      fs.writeFileSync(path.join(tmpDir, "SKILL.md"), skillMd);
+
+      execFileSync("node", [cliPath, "pack"], {
+        cwd: tmpDir,
+        stdio: "pipe"
+      });
+
+      const tarPath = path.join(tmpDir, "dist/cli-built-pkg-1.0.0.tgz");
+      const tarGz = fs.readFileSync(tarPath);
+      const res = await app.request(
+        "/v1/skills",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${alexToken}`,
+            "Content-Type": "application/gzip"
+          },
+          body: tarGz
+        },
+        env
+      );
+
+      expect(res.status).toBe(201);
+      const data = (await res.json()) as any;
+      expect(data.name).toBe("@alexdev/cli-built-pkg");
+      expect(data.version).toBe("1.0.0");
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
   });
 });
