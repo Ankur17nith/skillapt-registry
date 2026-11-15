@@ -4,7 +4,7 @@
  */
 export const PRODUCT_NAME = "skillapt" as const;
 
-export const REGISTRY_VERSION = "1.0.0" as const;
+export const REGISTRY_VERSION = "1.2.0" as const;
 
 export const LIMITS = {
   MAX_TARBALL_SIZE_BYTES: 5 * 1024 * 1024, // 5 MB
