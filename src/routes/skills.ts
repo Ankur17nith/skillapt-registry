@@ -13,6 +13,13 @@ export const skillsRouter = new Hono<{ Bindings: Env }>();
 
 const ALLOWED_SORTS = new Set(["downloads", "name", "updated"]);
 
+// Slack for multipart boundaries and field headers around the 5 MB archive.
+const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+
+function escapeLike(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 interface SkillDbRow {
   name: string;
   owner_id: string;
@@ -173,7 +180,7 @@ skillsRouter.get(
     const params: unknown[] = [];
 
     if (q) {
-      const escapedQ = q.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      const escapedQ = escapeLike(q);
       conditions.push(
         "(s.name LIKE ? ESCAPE '\\' OR s.description LIKE ? ESCAPE '\\' OR s.keywords LIKE ? ESCAPE '\\')"
       );
@@ -186,8 +193,8 @@ skillsRouter.get(
     }
 
     if (compat) {
-      conditions.push("s.compatibility LIKE ?");
-      params.push(`%"${compat}"%`);
+      conditions.push("s.compatibility LIKE ? ESCAPE '\\'");
+      params.push(`%"${escapeLike(compat)}"%`);
     }
 
     if (verifiedStr !== undefined && verifiedStr !== "") {
@@ -313,7 +320,21 @@ skillsRouter.post(
 
   try {
     if (contentType.includes("multipart/form-data")) {
-      const formData = await c.req.formData();
+      // Bound the raw request body BEFORE parsing: formData() would otherwise
+      // buffer an arbitrarily large (e.g. chunked) upload in memory first.
+      if (!c.req.raw.body) {
+        return c.json(
+          { error: { code: "BAD_REQUEST", message: "Upload body is empty." } },
+          400
+        );
+      }
+      const multipartBytes = await readSizeCappedBody(
+        c.req.raw.body as ReadableStream<Uint8Array>,
+        LIMITS.MAX_TARBALL_SIZE_BYTES + MULTIPART_OVERHEAD_BYTES
+      );
+      const formData = await new Response(multipartBytes, {
+        headers: { "Content-Type": contentType }
+      }).formData();
       const rawFile = formData.get("file") as unknown;
       if (!rawFile || typeof rawFile === "string" || typeof (rawFile as Blob).stream !== "function") {
         return c.json(
