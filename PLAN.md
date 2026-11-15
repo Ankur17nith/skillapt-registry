@@ -59,8 +59,8 @@
 |---|---|
 | Last updated | 2026-11-15 (M5 in progress: REG-43..REG-47 strictness, staging, and operational fixes) |
 | Current milestone | M5: Strictness, staging, and operational fixes (in progress) |
-| Current branch | `fix/deploy-workflow-gating` (merging to `main`) |
-| Current task | REG-44 complete; next REG-45 |
+| Current branch | `feat/staging-env` (merging to `main`) |
+| Current task | REG-45 complete; next REG-46 |
 | Baseline | `tsc` clean; 153/153 vitest tests pass; `pnpm smoke`, `pnpm test:integration` (14 scenarios), `pnpm conformance` (12 CLI + 5 attack scenarios) & `post-deploy-check.sh` pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
@@ -360,7 +360,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - [x] **REG-44** Make every deploy workflow manual (`workflow_dispatch`) with a GitHub environment requiring approval; no deploy on push or tag.
 
 #### Branch `feat/staging-env`
-- [ ] **REG-45** Add `env.staging` in `wrangler.jsonc` with its own D1, R2, DO bindings and placeholder database_id. Document staging setup in `docs/DEPLOY.md`.
+- [x] **REG-45** Add `env.staging` in `wrangler.jsonc` with its own D1, R2, DO bindings and placeholder database_id. Document staging setup in `docs/DEPLOY.md`.
 
 #### Branch `feat/remote-conformance`
 - [ ] **REG-46** Parameterize conformance and integration scripts to accept `REGISTRY_URL` plus tokens from environment variables, enabling runs against remote registries.
@@ -450,6 +450,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | agent | chore/production-deploy | REG-34, REG-39 | Created docs/DEPLOY.md, scripts/post-deploy-check.sh, and docs/RUNBOOK.md; updated REGISTRY_VERSION to 1.2.0; verified post-deploy-check passes locally | merge to main; human runs REG-35 and REG-36 |
 | 2026-11-15 | agent | fix/skillmd-name-strict | REG-43 | Strictly enforced SKILL.md frontmatter name must match package on-disk name (scope--name for scoped packages, unscoped name rejected); added regression tests & real CLI pack publish test | merge to main, start Branch fix/deploy-workflow-gating |
 | 2026-11-15 | agent | fix/deploy-workflow-gating | REG-44 | Gated deployment workflows to workflow_dispatch with environment approval requirement; deploy.yml parameterized with environment choice (production/staging) | merge to main, start Branch feat/staging-env |
+| 2026-11-15 | agent | feat/staging-env | REG-45 | Configured env.staging in wrangler.jsonc with dedicated D1, R2, and Durable Object bindings and placeholder database_id; documented in docs/DEPLOY.md | merge to main, start Branch feat/remote-conformance |
 | 2026-11-15 | agent | main | Final Verification | Verified git status, branch tracking, remote heads, graph log, merged branches, zero diff between main and origin/main, and all test suites pass | ready for human production deployment and acceptance demo |
 
 ### 13.1 Post-Merge Git State Verification

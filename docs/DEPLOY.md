@@ -184,3 +184,57 @@ REGISTRY_TOKEN="<your-admin-token>" \
 bash scripts/post-deploy-check.sh
 ```
 Verify all checks pass (health check, anonymous search, test package publishing, download integrity check).
+
+---
+
+## 11. Staging Environment Provisioning & Deployment
+
+The staging environment (`env.staging`) provides a safe pre-production environment with completely isolated D1 database, R2 bucket, and Durable Object bindings.
+
+### 11.1 Provision Staging Cloudflare Resources
+```bash
+# 1. Create Staging D1 Database
+npx wrangler d1 create skillapt-db-staging
+
+# 2. Create Staging R2 Bucket
+npx wrangler r2 bucket create skillapt-packages-staging
+```
+
+Update `wrangler.jsonc` under `env.staging.d1_databases[0]`:
+```jsonc
+"d1_databases": [
+  {
+    "binding": "DB",
+    "database_name": "skillapt-db-staging",
+    "database_id": "<PASTE-YOUR-STAGING-DATABASE-ID-HERE>",
+    "migrations_dir": "migrations"
+  }
+]
+```
+
+### 11.2 Apply Migrations to Staging
+```bash
+npx wrangler d1 migrations apply DB --remote --env staging
+```
+
+### 11.3 Configure Staging Secrets
+```bash
+# GitHub OAuth app for staging (callback: https://staging-registry.skillapt.dev/v1/auth/github/callback)
+npx wrangler secret put GITHUB_CLIENT_ID --env staging
+npx wrangler secret put GITHUB_CLIENT_SECRET --env staging
+
+# Salt for IP hashing
+npx wrangler secret put HASH_SALT --env staging
+```
+
+### 11.4 Deploy to Staging
+```bash
+npx wrangler deploy --env staging
+```
+
+### 11.5 Verify Staging Deployment
+```bash
+REGISTRY_URL="https://staging-registry.skillapt.dev" \
+REGISTRY_TOKEN="<your-staging-token>" \
+bash scripts/post-deploy-check.sh
+```
