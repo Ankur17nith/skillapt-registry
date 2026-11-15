@@ -57,10 +57,10 @@
 
 | Field | Value |
 |---|---|
-| Last updated | 2026-11-15 (All engineering branches complete & merged; ready for human production deployment) |
-| Current milestone | M4: Docs, CI, production-ready package (complete) |
-| Current branch | `chore/production-deploy` (all branches merged to `main`) |
-| Current task | REG-34, REG-39 complete; ready for human steps REG-35 (deploy & acceptance demo) and REG-36 (tag v1.2.0) |
+| Last updated | 2026-11-15 (M5 in progress: REG-43..REG-47 strictness, staging, and operational fixes) |
+| Current milestone | M5: Strictness, staging, and operational fixes (in progress) |
+| Current branch | `main` (starting REG-43) |
+| Current task | REG-43: SKILL.md name strictness |
 | Baseline | `tsc` clean; 153/153 vitest tests pass; `pnpm smoke`, `pnpm test:integration` (14 scenarios), `pnpm conformance` (12 CLI + 5 attack scenarios) & `post-deploy-check.sh` pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
@@ -72,6 +72,7 @@
 | M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [x] |
 | M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [x] |
 | M4 | Docs/CI sync and production-ready deploy package (human deploys) | [x] |
+| M5 | Strictness, staging, and operational fixes (REG-43..REG-47) | [~] |
 
 ---
 
@@ -349,6 +350,23 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - [x] **REG-39** `docs/RUNBOOK.md`: incident procedure for malware (takedown -> audit -> notice -> postmortem), D1 export/backup schedule, R2 versioning, `wrangler rollback`, secret and token rotation, alerting on 5xx rate and publish failures, how to take the registry read-only.
 - [ ] **REG-35** (HUMAN) Run DEPLOY.md and `post-deploy-check.sh`, then the CLI acceptance demo (§16.8) against production; record results in §13.
 - [ ] **REG-36** (HUMAN) Tag `v1.2.0` after REG-35 passes (tag `v1.1.0` already exists at commit 027fac8 per D-012).
+
+### M5. Strictness, staging, and operational fixes
+
+#### Branch `fix/skillmd-name-strict`
+- [ ] **REG-43** Require SKILL.md frontmatter `name` to match the on-disk folder name exactly (`scope--name` for scoped packages); reject unscoped name for scoped packages. Test with a package built by the real CLI. Restore D-004 text in §3 so it matches the CLI repo.
+
+#### Branch `fix/deploy-workflow-gating`
+- [ ] **REG-44** Make every deploy workflow manual (`workflow_dispatch`) with a GitHub environment requiring approval; no deploy on push or tag.
+
+#### Branch `feat/staging-env`
+- [ ] **REG-45** Add `env.staging` in `wrangler.jsonc` with its own D1, R2, DO bindings and placeholder database_id. Document staging setup in `docs/DEPLOY.md`.
+
+#### Branch `feat/remote-conformance`
+- [ ] **REG-46** Parameterize conformance and integration scripts to accept `REGISTRY_URL` plus tokens from environment variables, enabling runs against remote registries.
+
+#### Branch `docs/runbook-fixes`
+- [ ] **REG-47** Fix RUNBOOK: R2 has no object versioning (verify against Cloudflare docs); replace with retention lock or periodic copy; add D1 export procedure using `wrangler d1 export`.
 
 ---
 
