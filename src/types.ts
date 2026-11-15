@@ -8,6 +8,7 @@ export interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   CORS_ORIGIN?: string;
+  PUBLIC_ORIGIN?: string;
   RATE_LIMITER_DO?: DurableObjectNamespace;
   RATE_LIMITER?: RateLimiter;
   REPORT_SALT?: string;

@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { getCookie } from "hono/cookie";
 import { computeSha256 } from "../utils/crypto";
+import { getAllowedOrigins } from "../utils/environment";
 import type { Env, UserSession } from "../types";
 
 declare module "hono" {
@@ -22,13 +23,7 @@ interface UserDbRow {
 
 export function isAllowedOrigin(originOrReferer: string | undefined, env?: Env): boolean {
   if (!originOrReferer) return false;
-  const rawOrigins = env?.CORS_ORIGIN || "http://localhost:3000,http://localhost:5173,https://skillapt.dev";
-  const originsList = rawOrigins.split(",").map((o) => o.trim()).filter(Boolean);
-
-  let allowed = originsList;
-  if (env?.ENVIRONMENT === "production") {
-    allowed = originsList.filter((o) => !o.includes("localhost") && !o.includes("127.0.0.1"));
-  }
+  const allowed = getAllowedOrigins(env);
 
   try {
     const parsed = new URL(originOrReferer);

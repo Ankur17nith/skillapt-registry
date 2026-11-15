@@ -1,20 +1,24 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { PRODUCT_NAME, REGISTRY_VERSION } from "./config";
+import { getAllowedOrigins, hasWildcardOrigin, isProductionLike } from "./utils/environment";
 import type { Env } from "./types";
 
 export const app = new Hono<{ Bindings: Env }>();
 
-// Enable CORS with origin checking & security headers
+// Security headers and CORS with an exact-match origin allowlist
 app.use("*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
   c.header("Vary", "Origin");
+  if (isProductionLike(c.env)) {
+    c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
 
-  const rawOrigins = c.env?.CORS_ORIGIN || "http://localhost:3000,http://localhost:5173,https://skillapt.dev";
-  const originsList = rawOrigins.split(",").map((o) => o.trim()).filter(Boolean);
-
-  if (originsList.includes("*")) {
+  if (hasWildcardOrigin(c.env)) {
     return c.json(
       {
         error: {
@@ -26,11 +30,7 @@ app.use("*", async (c, next) => {
     );
   }
 
-  let allowedOrigins = originsList;
-  if (c.env?.ENVIRONMENT === "production") {
-    allowedOrigins = originsList.filter((o) => !o.includes("localhost") && !o.includes("127.0.0.1"));
-  }
-
+  const allowedOrigins = getAllowedOrigins(c.env);
   const originHeader = c.req.header("Origin");
   const isAllowed = originHeader ? allowedOrigins.includes(originHeader) : false;
 
@@ -48,7 +48,7 @@ app.use("*", async (c, next) => {
 app.onError((err, c) => {
   console.error("Unhandled error:", err);
   const requestId = c.req.header("cf-ray") || crypto.randomUUID();
-  const isProd = c.env?.ENVIRONMENT === "production";
+  const isProd = isProductionLike(c.env);
   return c.json(
     {
       error: {
@@ -113,6 +113,22 @@ app.use(
     keyGenerator: (c) => `general:${getClientIp(c)}`
   })
 );
+
+// Cap request bodies on everything except the package upload (which streams
+// through its own 5 MB limit): JSON endpoints never need more than a few KB.
+const jsonBodyLimit = bodyLimit({
+  maxSize: 64 * 1024,
+  onError: (c) =>
+    c.json(
+      { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body exceeds the 64 KB limit." } },
+      413
+    )
+});
+app.use("/v1/*", async (c, next) => {
+  if (c.req.method === "POST" && c.req.path === "/v1/skills") return next();
+  return jsonBodyLimit(c, next);
+});
+app.use("/dashboard/*", jsonBodyLimit);
 
 // Mount API routes
 app.route("/v1/skills", skillsRouter);
