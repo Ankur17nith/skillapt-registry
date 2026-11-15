@@ -57,20 +57,20 @@
 
 | Field | Value |
 |---|---|
-| Last updated | 2026-11-15 (re-baseline: tag v1.1.0 reconciled, target v1.2.0, workflows & bindings updated) |
-| Current milestone | M1: Make it run and make publishing safe (complete) |
-| Current branch | `fix/worker-startup-and-config` (next: `fix/search-download-reports`) |
-| Current task | REG-42 (cron trigger in Branch 8) / REG-38 |
-| Baseline | `tsc` clean; 152/152 vitest tests pass; `pnpm smoke` & `pnpm test:integration` (14 scenarios) pass on workerd |
+| Last updated | 2026-11-15 (Branch 10 CLI conformance complete; next: docs/ci-spec-sync) |
+| Current milestone | M3: Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance (complete) |
+| Current branch | `test/cli-contract-conformance` (next: `docs/ci-spec-sync`) |
+| Current task | REG-38 done; starting Branch 11 (REG-31, REG-32, REG-33) |
+| Baseline | `tsc` clean; 153/153 vitest tests pass; `pnpm smoke`, `pnpm test:integration` (14 scenarios) & `pnpm conformance` (12 CLI + 5 attack scenarios) pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
-| CLI repo (`skillapt`) | Complete & built locally in `../skillapt`: tag `v1.0.0` checked out, 11 branches merged, ready for conformance testing |
+| CLI repo (`skillapt`) | Complete & built locally in `../skillapt`: tag `v1.0.0` checked out, passed all 12 CLI scenarios and 5 attack tests in `pnpm conformance` |
 
 | Milestone | Goal | Status |
 |---|---|---|
 | M1 | Worker runs on Cloudflare; publish validation closed (scope, names, binaries, versions, dependencies); workerd integration tests | [x] |
 | M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [x] |
-| M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [~] |
+| M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [x] |
 | M4 | Docs/CI sync and production-ready deploy package (human deploys) | [ ] |
 
 ---
@@ -245,8 +245,8 @@ If real R2 does not honor `onlyIf: {etagDoesNotMatch:"*"}`, use the reserve-firs
 | B-24 | Medium | OAuth/sessions: `user:email` requested but unused; session ids plaintext in DB; expired sessions never deleted; handle rename can hit UNIQUE -> 500; `SESSION_SECRET` unused | Resolved in 9a2d6cf. sha256 hashed session ids, expired cleanup on lookup, user:email scope removed. |
 | B-25 | Medium | Publishing an older version overwrites skill-level description/readme | Resolved in ce87342. Only highest stable version updates package-level metadata. |
 | B-26 | Low | wrangler 3 outdated; runtime `zod` high advisory; junk `allowBuilds` placeholder in pnpm-workspace.yaml; placeholder `database_id`; README `file:///home/ankurgupta/...` link; tests need Node >= 22.5 with no `engines`/CI | Resolved in d2dd00f & 79fd970. Wrangler 4, engines >= 22.5, workspace cleaned. Production database_id placeholder documented. |
-| B-27 | Medium | All tests run on Node with mocks; nothing exercises workerd, real D1 batch/limits, R2 conditional puts or Durable Objects | In progress: REG-37 `pnpm test:integration` script against local workerd + D1/R2 to be completed in Branch 1. |
-| B-28 | Medium | The registry has never been run against the real CLI (v1.0.0 was tested against a mock only) | In progress: REG-38 `pnpm conformance` script to be implemented in Branch 10 against built `../skillapt` CLI. |
+| B-27 | Medium | All tests run on Node with mocks; nothing exercises workerd, real D1 batch/limits, R2 conditional puts or Durable Objects | Resolved in 1927008 (REG-37). `pnpm test:integration` runs 14 full scenarios on real workerd with local D1, R2, and DO. |
+| B-28 | Medium | The registry has never been run against the real CLI (v1.0.0 was tested against a mock only) | Resolved in Branch 10 (REG-38). `pnpm conformance` drives the real CLI v1.0.0 across all lifecycle operations (init, pack, publish, search, info, install, --frozen, yank, un-yank, outdated, update, takedown, and attack tarballs). |
 | B-29 | Low | GitHub logins can be up to 39 chars and legacy ones contain consecutive hyphens, but the scope rule is 2..30 chars without `--` (see D-011) | Resolved in 2192be4 per D-011. Logins not matching scope criteria claim no scope. |
 
 ---
@@ -333,7 +333,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - [x] **REG-30** Regression tests under `tests/security/` for every attack in §6 (scope hijack, reserved names, version forms, ELF/MZ, PAX bypass, hidden dir, junk dependencies, `javascript:` repository, 3 MB SKILL.md, hostile Origin, CORS `*`, token minting, error leak, yank retry, 15 publishes).
 
 #### Branch `test/cli-contract-conformance`
-- [ ] **REG-38** (B-28) `scripts/conformance.mjs` (+ `pnpm conformance`): given `SKILLAPT_CLI_DIR` (a built checkout of the CLI at a tag, default `v1.0.0`), start the Worker locally, create an admin and a normal user plus tokens directly in the LOCAL D1 (fixtures only, never in migrations), then drive the real CLI: init, pack, publish, search, info, install with `--target claude --target antigravity` into a temp project, `--frozen` reinstall, yank twice (stays yanked), outdated, update, admin takedown (-> install gets 410 and refuses), plus crafted attack archives posted with `curl` (ELF, PAX path trick, hidden dir, bad versions, foreign scope).
+- [x] **REG-38** (B-28) `scripts/conformance.mjs` (+ `pnpm conformance`): given `SKILLAPT_CLI_DIR` (a built checkout of the CLI at a tag, default `v1.0.0`), start the Worker locally, create an admin and a normal user plus tokens directly in the LOCAL D1 (fixtures only, never in migrations), then drive the real CLI: init, pack, publish, search, info, install with `--target claude --target antigravity` into a temp project, `--frozen` reinstall, yank twice (stays yanked), outdated, update, admin takedown (-> install gets 410 and refuses), plus crafted attack archives posted with `curl` (ELF, PAX path trick, hidden dir, bad versions, foreign scope).
   AC: all scenarios pass. Any CLI/registry mismatch is fixed on the registry side if the registry is wrong, otherwise logged in §12 as a CLI issue (do not edit the CLI repo). Record every mismatch in §6.
   V: `pnpm conformance` green; output pasted in §13.
 
@@ -405,7 +405,9 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - Q3: Which GitHub account is the first admin?
 - Q4: GitHub OAuth app: callback URL and credentials (human creates; never in the repo).
 - Q5: Tarball signing/provenance is out of scope for 1.x; confirm.
-- Q6: Any CLI/registry mismatch found by REG-38 that needs a CLI change goes here with details.
+- Q6: Any CLI/registry mismatch found by REG-38 that needs a CLI change goes here with details:
+  - CLI option `--target`: In `../skillapt/src/cli.ts`, `--target <target>` is registered as a single-value option without a collector (`.option("--target <target>")`). When passed multiple times (e.g. `--target claude --target antigravity`), Commander overwrites `options.target` with the last value ("antigravity"). In contrast, `../skillapt/src/commands/install.ts` supports comma-separated targets via `options.target.split(",")`. Conformance tests used `--target claude,antigravity` which succeeds. To allow repeated `--target` flags, CLI `src/cli.ts` should define `--target` with a custom collector or variadic argument.
+  - SKILL.md Frontmatter naming: Scoped packages use `scope--name` for their on-disk directory name per D-004. Registry's `src/validation/tar.ts` was conformed to accept `scope--name` as well as unscoped name, aligning with CLI v1.0.0.
 - Q7 (Reconciled State / Human Decisions):
   - `wrangler.jsonc`:
     - Production `database_id` is `"00000000-0000-0000-0000-000000000000"`. Human needs to run `wrangler d1 create skillapt-db-prod` and supply real UUID before production deployment.
@@ -425,6 +427,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | agent | docs/plan-reconcile | Step 0 re-baseline | Reconciled PLAN.md with tag v1.1.0, GitHub Actions & Pages workflows, updated wrangler bindings, D-012 (target v1.2.0), and updated task dashboard | merge to main, then start Branch 1 |
 | 2026-11-15 | agent | fix/worker-startup-and-config | REG-37, workflow triggers | Disabled auto-deploy in deploy.yml/pages.yml, implemented test-integration.mjs running 14 real workerd scenarios | merge to main, then start Branch 8 cron |
 | 2026-11-15 | agent | fix/search-download-reports | REG-42 | Implemented daily cron trigger in wrangler.jsonc, exported scheduled handler in src/index.ts, and added unit tests | merge to main, then Branch 10 conformance |
+| 2026-11-15 | agent | test/cli-contract-conformance | REG-38 | Implemented scripts/conformance.mjs and pnpm conformance; verified all 12 CLI scenarios (doctor, search, init, pack, publish, info, install, --frozen, yank, un-yank, outdated/update, takedown refusal) and 5 attack tarballs pass | merge to main, then Branch 11 docs/ci-spec-sync |
 
 ---
 
