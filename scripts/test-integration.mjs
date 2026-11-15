@@ -54,22 +54,41 @@ function createTarGz(files) {
 async function main() {
   console.log("=== Starting workerd Integration Test Suite ===");
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "skillapt-integ-"));
-  const port = await getFreePort();
-  const baseUrl = `http://127.0.0.1:${port}/v1`;
-  console.log(`Using persist directory: ${tmpDir}`);
-  console.log(`Assigned port: ${port}`);
-
+  const isRemote = Boolean(process.env.REGISTRY_URL);
+  let baseUrl;
   let devProcess = null;
+  let tmpDir = null;
+  let port = null;
+
+  const alexToken = process.env.REGISTRY_TOKEN || "apt_live_testtoken1234567890abcdef";
+  const adminToken = process.env.ADMIN_TOKEN || "apt_live_admintoken1234567890abcdef";
+
+  if (isRemote) {
+    const rawUrl = process.env.REGISTRY_URL.replace(/\/+$/, "");
+    baseUrl = rawUrl.endsWith("/v1") ? rawUrl : `${rawUrl}/v1`;
+    console.log(`Integration Target: REMOTE Registry (${baseUrl})`);
+    if (process.env.REGISTRY_TOKEN) console.log("Using REGISTRY_TOKEN from environment.");
+    if (process.env.ADMIN_TOKEN) console.log("Using ADMIN_TOKEN from environment.");
+  } else {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "skillapt-integ-"));
+    port = await getFreePort();
+    baseUrl = `http://127.0.0.1:${port}/v1`;
+    console.log(`Integration Target: LOCAL workerd (${baseUrl})`);
+    console.log(`Using persist directory: ${tmpDir}`);
+    console.log(`Assigned port: ${port}`);
+  }
+
   const cleanup = () => {
     if (devProcess) {
       console.log(`Stopping wrangler dev process (PID ${devProcess.pid})...`);
       devProcess.kill();
       devProcess = null;
     }
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    if (tmpDir) {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
   };
 
   process.on("exit", cleanup);
@@ -77,58 +96,60 @@ async function main() {
   process.on("SIGTERM", () => { cleanup(); process.exit(1); });
 
   try {
-    // 1. Apply D1 migrations to local persistence
-    console.log("1. Applying D1 migrations to local database...");
-    execSync(`npx wrangler d1 migrations apply DB --local --persist-to "${tmpDir}"`, {
-      env: { ...process.env, CI: "true" },
-      stdio: "pipe"
-    });
-    console.log("   Migrations applied successfully.");
+    if (!isRemote) {
+      // 1. Apply D1 migrations to local persistence
+      console.log("1. Applying D1 migrations to local database...");
+      execSync(`npx wrangler d1 migrations apply DB --local --persist-to "${tmpDir}"`, {
+        env: { ...process.env, CI: "true" },
+        stdio: "pipe"
+      });
+      console.log("   Migrations applied successfully.");
 
-    // 2. Seed test fixtures
-    console.log("2. Seeding test fixtures directly into local D1...");
-    const alexToken = "apt_live_testtoken1234567890abcdef";
-    const alexHash = sha256Hex(alexToken);
-    const adminToken = "apt_live_admintoken1234567890abcdef";
-    const adminHash = sha256Hex(adminToken);
-    const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 90 * 86400 * 1000).toISOString();
+      // 2. Seed test fixtures
+      console.log("2. Seeding test fixtures directly into local D1...");
+      const alexHash = sha256Hex(alexToken);
+      const adminHash = sha256Hex(adminToken);
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + 90 * 86400 * 1000).toISOString();
 
-    const seedSql = `
-      INSERT OR REPLACE INTO users (id, github_id, handle, name, email, avatar_url, role, created_at, updated_at) VALUES
-      ('usr_alexdev', 10101, 'alexdev', 'Alex Rivers', 'alex@example.com', '', 'user', '${now}', '${now}'),
-      ('usr_admin', 99999, 'adminuser', 'Admin User', 'admin@example.com', '', 'admin', '${now}', '${now}');
+      const seedSql = `
+        INSERT OR REPLACE INTO users (id, github_id, handle, name, email, avatar_url, role, created_at, updated_at) VALUES
+        ('usr_alexdev', 10101, 'alexdev', 'Alex Rivers', 'alex@example.com', '', 'user', '${now}', '${now}'),
+        ('usr_admin', 99999, 'adminuser', 'Admin User', 'admin@example.com', '', 'admin', '${now}', '${now}');
 
-      INSERT OR REPLACE INTO scopes (scope, owner_id, github_id, created_at) VALUES
-      ('alexdev', 'usr_alexdev', 10101, '${now}');
+        INSERT OR REPLACE INTO scopes (scope, owner_id, github_id, created_at) VALUES
+        ('alexdev', 'usr_alexdev', 10101, '${now}');
 
-      INSERT OR REPLACE INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, created_at) VALUES
-      ('tok_alex', 'usr_alexdev', 'alex-cli', 'apt_live_test', '${alexHash}', '${expiresAt}', '${now}'),
-      ('tok_admin', 'usr_admin', 'admin-cli', 'apt_live_admi', '${adminHash}', '${expiresAt}', '${now}');
-    `;
+        INSERT OR REPLACE INTO api_tokens (id, user_id, name, prefix, token_hash, expires_at, created_at) VALUES
+        ('tok_alex', 'usr_alexdev', 'alex-cli', 'apt_live_test', '${alexHash}', '${expiresAt}', '${now}'),
+        ('tok_admin', 'usr_admin', 'admin-cli', 'apt_live_admi', '${adminHash}', '${expiresAt}', '${now}');
+      `;
 
-    const seedFile = path.join(tmpDir, "integ_seed.sql");
-    fs.writeFileSync(seedFile, seedSql, "utf8");
-    execSync(`npx wrangler d1 execute DB --local --persist-to "${tmpDir}" --file="${seedFile}"`, {
-      env: { ...process.env, CI: "true" },
-      stdio: "pipe"
-    });
-    console.log("   Seed data inserted successfully.");
+      const seedFile = path.join(tmpDir, "integ_seed.sql");
+      fs.writeFileSync(seedFile, seedSql, "utf8");
+      execSync(`npx wrangler d1 execute DB --local --persist-to "${tmpDir}" --file="${seedFile}"`, {
+        env: { ...process.env, CI: "true" },
+        stdio: "pipe"
+      });
+      console.log("   Seed data inserted successfully.");
 
-    // 3. Start wrangler dev --local
-    console.log("3. Launching wrangler dev on workerd runtime...");
-    const devLog = path.join(tmpDir, "wrangler.log");
-    const logFd = fs.openSync(devLog, "w");
+      // 3. Start wrangler dev --local
+      console.log("3. Launching wrangler dev on workerd runtime...");
+      const devLog = path.join(tmpDir, "wrangler.log");
+      const logFd = fs.openSync(devLog, "w");
 
-    devProcess = spawn("npx", [
-      "wrangler", "dev",
-      "--local",
-      "--port", port.toString(),
-      "--ip", "127.0.0.1",
-      "--persist-to", tmpDir
-    ], {
-      stdio: ["ignore", logFd, logFd]
-    });
+      devProcess = spawn("npx", [
+        "wrangler", "dev",
+        "--local",
+        "--port", port.toString(),
+        "--ip", "127.0.0.1",
+        "--persist-to", tmpDir
+      ], {
+        stdio: ["ignore", logFd, logFd]
+      });
+    } else {
+      console.log("1-3. Skipping local database setup and wrangler dev process (running against remote REGISTRY_URL)...");
+    }
 
     // 4. Poll health check
     console.log("4. Waiting for /v1/health...");
@@ -148,11 +169,16 @@ async function main() {
     }
 
     if (!ready) {
-      console.error("ERROR: Worker failed to start within timeout. Logs:");
-      console.error(fs.readFileSync(devLog, "utf8"));
+      console.error(`ERROR: Worker failed to start or respond within timeout at ${baseUrl}.`);
+      if (tmpDir) {
+        const devLog = path.join(tmpDir, "wrangler.log");
+        if (fs.existsSync(devLog)) {
+          console.error(fs.readFileSync(devLog, "utf8"));
+        }
+      }
       process.exit(1);
     }
-    console.log("   Worker is online and healthy!");
+    console.log(`   Worker is online and healthy at ${baseUrl}!`);
 
     // Scenario 1: Health check details
     {
