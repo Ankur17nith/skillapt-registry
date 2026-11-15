@@ -57,10 +57,10 @@
 
 | Field | Value |
 |---|---|
-| Last updated | 2026-11-15 (M5 in progress: REG-43..REG-47 strictness, staging, and operational fixes) |
-| Current milestone | M5: Strictness, staging, and operational fixes (in progress) |
-| Current branch | `feat/remote-conformance` (merging to `main`) |
-| Current task | REG-46 complete; next REG-47 |
+| Last updated | 2026-11-15 (All M5 tasks REG-43..REG-47 complete & verified on workerd; ready for human release steps) |
+| Current milestone | M5: Strictness, staging, and operational fixes (complete) |
+| Current branch | `docs/runbook-fixes` (merging to `main`) |
+| Current task | REG-43..REG-47 complete; ready for human steps REG-35 (deploy & acceptance demo) and REG-36 (tag v1.2.0) |
 | Baseline | `tsc` clean; 153/153 vitest tests pass; `pnpm smoke`, `pnpm test:integration` (14 scenarios), `pnpm conformance` (12 CLI + 5 attack scenarios) & `post-deploy-check.sh` pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
@@ -72,7 +72,7 @@
 | M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [x] |
 | M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [x] |
 | M4 | Docs/CI sync and production-ready deploy package (human deploys) | [x] |
-| M5 | Strictness, staging, and operational fixes (REG-43..REG-47) | [~] |
+| M5 | Strictness, staging, and operational fixes (REG-43..REG-47) | [x] |
 
 ---
 
@@ -366,7 +366,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - [x] **REG-46** Parameterize conformance and integration scripts to accept `REGISTRY_URL` plus tokens from environment variables, enabling runs against remote registries.
 
 #### Branch `docs/runbook-fixes`
-- [ ] **REG-47** Fix RUNBOOK: R2 has no object versioning (verify against Cloudflare docs); replace with retention lock or periodic copy; add D1 export procedure using `wrangler d1 export`.
+- [x] **REG-47** Fix RUNBOOK: R2 has no object versioning (verify against Cloudflare docs); replace with retention lock or periodic copy; add D1 export procedure using `wrangler d1 export`.
 
 ---
 
@@ -394,7 +394,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 
 - Deploy only from a tagged `main` by the human: `wrangler deploy --env production`. Apply migrations with `--remote --env production` BEFORE deploying code that needs them.
 - Secrets: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `HASH_SALT`. Vars: `ENVIRONMENT`, `PUBLIC_ORIGIN`, `CORS_ORIGIN`.
-- Monitoring: Workers observability/logs with request ids; alerts on 5xx rate and publish failures. Backups: scheduled D1 export, R2 versioning (see RUNBOOK).
+- Monitoring: Workers observability/logs with request ids; alerts on 5xx rate and publish failures. Backups: scheduled D1 export, R2 periodic backup / retention (see RUNBOOK).
 - Malware incident: admin takedown -> audit log -> notice via SECURITY.md channel -> postmortem row in §13.
 - Compatibility: API v1 may add optional fields; never remove or rename fields in §3.3 without a v2.
 
@@ -452,6 +452,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | agent | fix/deploy-workflow-gating | REG-44 | Gated deployment workflows to workflow_dispatch with environment approval requirement; deploy.yml parameterized with environment choice (production/staging) | merge to main, start Branch feat/staging-env |
 | 2026-11-15 | agent | feat/staging-env | REG-45 | Configured env.staging in wrangler.jsonc with dedicated D1, R2, and Durable Object bindings and placeholder database_id; documented in docs/DEPLOY.md | merge to main, start Branch feat/remote-conformance |
 | 2026-11-15 | agent | feat/remote-conformance | REG-46 | Parameterized scripts/conformance.mjs and scripts/test-integration.mjs with REGISTRY_URL, REGISTRY_TOKEN, and ADMIN_TOKEN support for remote target execution | merge to main, start Branch docs/runbook-fixes |
+| 2026-11-15 | agent | docs/runbook-fixes | REG-47 | Fixed docs/RUNBOOK.md: clarified R2 lacks native object versioning, documented create-only immutability, least privilege access, and periodic sync; detailed D1 manual export/restore procedure | merge to main, final verification |
 | 2026-11-15 | agent | main | Final Verification | Verified git status, branch tracking, remote heads, graph log, merged branches, zero diff between main and origin/main, and all test suites pass | ready for human production deployment and acceptance demo |
 
 ### 13.1 Post-Merge Git State Verification
