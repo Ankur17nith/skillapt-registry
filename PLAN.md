@@ -57,20 +57,20 @@
 
 | Field | Value |
 |---|---|
-| Last updated | 2026-11-15 (baseline audit + plan) |
-| Current milestone | M1: Make it run and make publishing safe |
-| Current branch | (none; start with `fix/worker-startup-and-config`) |
-| Current task | REG-01 |
-| Baseline | `tsc` clean; 59/59 vitest tests pass on Node with mocks; **Worker crashes on workerd at startup** (B-01) |
-| Deployed | UNVERIFIED. `registry.skillapt.dev` did not resolve from the audit sandbox; `database_id` in wrangler.jsonc is a placeholder |
-| Dependencies | `pnpm audit`: 31 findings (mostly dev tooling via wrangler 3); 1 high in runtime `zod` |
-| CLI repo (`skillapt`) | Reported complete: 11 branches merged, tag `v1.0.0` pushed, NOT yet on npm; tested against a mock registry only (human verification pending) |
+| Last updated | 2026-11-15 (re-baseline: tag v1.1.0 reconciled, target v1.2.0, workflows & bindings updated) |
+| Current milestone | M1: Make it run and make publishing safe (in progress) |
+| Current branch | `docs/plan-reconcile` (next: `fix/worker-startup-and-config`) |
+| Current task | Pre-Branch 1 reconcile / REG-37 |
+| Baseline | `tsc` clean; 152/152 vitest tests pass on Node with mocks; `pnpm smoke` passes on workerd (B-01 resolved) |
+| Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
+| Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
+| CLI repo (`skillapt`) | Complete & built locally in `../skillapt`: tag `v1.0.0` checked out, 11 branches merged, ready for conformance testing |
 
 | Milestone | Goal | Status |
 |---|---|---|
-| M1 | Worker runs on Cloudflare; publish validation closed (scope, names, binaries, versions, dependencies) | [ ] |
-| M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [ ] |
-| M3 | Real rate limits, search/download performance, seed and test hygiene, CLI conformance | [ ] |
+| M1 | Worker runs on Cloudflare; publish validation closed (scope, names, binaries, versions, dependencies); workerd integration tests | [~] |
+| M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [x] |
+| M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [~] |
 | M4 | Docs/CI sync and production-ready deploy package (human deploys) | [ ] |
 
 ---
@@ -215,39 +215,39 @@ If real R2 does not honor `onlyIf: {etagDoesNotMatch:"*"}`, use the reserve-firs
 
 ---
 
-## 6. Audit baseline (2026-11-15). Known issues by ID
+## 6. Audit baseline (2026-11-15). Known issues by ID & Reconciliation Status
 
-| ID | Sev | Issue | Evidence |
+| ID | Sev | Issue | Status & Evidence |
 |---|---|---|---|
-| B-01 | Critical | Worker fails to start on workerd: `setInterval` at module scope in rate-limit.ts | `wrangler dev --local`: "Disallowed operation called within global scope"; vitest passes only on Node |
-| B-02 | Critical | No scope ownership: `sarahai` published `@alexdev/pdf-tools` and `@anthropic/helper` (201) | PoC |
-| B-03 | Critical | Reserved names enforced only in the CLI: `claude`, `admin` published (201) | PoC |
-| B-04 | Critical | No magic-byte check: ELF in `run.py`, MZ in `a.txt` accepted | PoC |
-| B-05 | Critical | PAX bypass: registry validated `ok.md`, node-tar extracts `payload.exe` | PoC + `tar.list` of the accepted archive |
-| B-06 | Critical | No takedown: no `status`/`removed`, no admin routes (SPEC/openapi list them); reports never reviewed | code |
-| B-07 | Critical | `migrations/seed.sql` holds a demo token (sha256 of `apt_live_testtoken1234567890abcdef` matches) owning verified skills; tests depend on it | verified hash |
-| B-08 | Critical | No way to obtain a token: OAuth redirects to a non-existent `/dashboard` | code |
-| B-09 | High | Hidden directories allowed (`.claude/settings.json` -> 201) | PoC |
-| B-10 | High | Non-canonical versions accepted: `v1.0.0`, ` 1.0.0`, `1.0.0+evil` | PoC |
-| B-11 | High | Dependencies unchecked: junk keys (`../../etc/x`), 60+ entries, nonexistent, self-dependency; `MAX_DEPENDENCIES` unused | PoC |
-| B-12 | High | `repository: "javascript:alert(1)"`, arbitrary `compatibility`, unvalidated SKILL.md frontmatter, 3 MB SKILL.md accepted | PoC |
-| B-13 | High | Manifest confusion: `skill.json` accepted at depth 1 or 2; names trimmed; no header checksum or duplicate checks | code |
-| B-14 | High | Publish not atomic: R2 put first, separate D1 inserts; concurrent same-name publish can overwrite the R2 object; failures leave orphans | code |
-| B-15 | High | No publish rate limit (15 publishes -> all 201); in-memory limiter is per isolate; `x-forwarded-for` fallback | PoC + code |
-| B-16 | High | CORS `*` + credentials reflects any origin; localhost allowed in production by default; base config `ENVIRONMENT=development` weakens cookies | PoC + config |
-| B-17 | High | No CSRF Origin check: token mint with `Origin: https://evil.example` -> 201 | PoC |
-| B-18 | High | An API token can mint further tokens; no expiry, count limit or scope | PoC |
-| B-19 | High | Yank is a toggle: the same request twice un-yanks | PoC |
-| B-20 | High | `onError` returns `err.message` (leaks internals) | PoC |
-| B-21 | Medium | Search N+1 (up to 101 D1 queries/request); `LIKE` wildcards unescaped; latest via per-row sort; prereleases counted | code |
-| B-22 | Medium | Downloads buffer the whole object, count every request, `immutable` cache even for yanked | code |
-| B-23 | Medium | Reports: raw IP stored, `details` unbounded, `version` unvalidated | code |
-| B-24 | Medium | OAuth/sessions: `user:email` requested but unused; session ids plaintext in DB; expired sessions never deleted; handle rename can hit UNIQUE -> 500; `SESSION_SECRET` unused | code |
-| B-25 | Medium | Publishing an older version overwrites skill-level description/readme | code |
-| B-26 | Low | wrangler 3 outdated; runtime `zod` high advisory; junk `allowBuilds` placeholder in pnpm-workspace.yaml; placeholder `database_id`; README `file:///home/ankurgupta/...` link; tests need Node >= 22.5 with no `engines`/CI | audit |
-| B-27 | Medium | All tests run on Node with mocks; nothing exercises workerd, real D1 batch/limits, R2 conditional puts or Durable Objects | analysis |
-| B-28 | Medium | The registry has never been run against the real CLI (v1.0.0 was tested against a mock only) | analysis |
-| B-29 | Low | GitHub logins can be up to 39 chars and legacy ones contain consecutive hyphens, but the scope rule is 2..30 chars without `--` (see D-011) | analysis |
+| B-01 | Critical | Worker fails to start on workerd: `setInterval` at module scope in rate-limit.ts | Resolved in b12b485. Verified by `tests/startup.test.ts` and `pnpm smoke` (workerd starts cleanly). |
+| B-02 | Critical | No scope ownership: `sarahai` published `@alexdev/pdf-tools` and `@anthropic/helper` (201) | Resolved in 2192be4. Migration 0002 introduces `scopes` table bound to github_id; tests assert 403. |
+| B-03 | Critical | Reserved names enforced only in the CLI: `claude`, `admin` published (201) | Resolved in 2192be4. `RESERVED_NAMES` list and `--` reject in `src/config.ts`; tests assert 400. |
+| B-04 | Critical | No magic-byte check: ELF in `run.py`, MZ in `a.txt` accepted | Resolved in 2192be4. Magic byte inspection on 512 bytes in `src/validation/tar.ts`; tests assert 400. |
+| B-05 | Critical | PAX bypass: registry validated `ok.md`, node-tar extracts `payload.exe` | Resolved in 2192be4. PAX `x` headers applied to effective path in `src/validation/tar.ts`; tests assert 400. |
+| B-06 | Critical | No takedown: no `status`/`removed`, no admin routes (SPEC/openapi list them); reports never reviewed | Resolved in a0a9273 & 1d90ea1. Migration 0003 adds status, removed_at, removal_reason, users.role, audit_log; admin routes implemented. |
+| B-07 | Critical | `migrations/seed.sql` holds a demo token (sha256 of `apt_live_testtoken1234567890abcdef` matches) owning verified skills; tests depend on it | Resolved in 8900e89. Demo tokens removed from migrations; test fixtures moved to `tests/fixtures/seed.sql`; test enforces no token insert in migrations. |
+| B-08 | Critical | No way to obtain a token: OAuth redirects to a non-existent `/dashboard` | Resolved in cdda971. Server-rendered `/dashboard` implemented with strict CSP and CSRF. |
+| B-09 | High | Hidden directories allowed (`.claude/settings.json` -> 201) | Resolved in 2192be4. Every path segment checked for hidden dot-prefixes in `src/validation/tar.ts`. |
+| B-10 | High | Non-canonical versions accepted: `v1.0.0`, ` 1.0.0`, `1.0.0+evil` | Resolved in 2192be4. `semver.valid(v) === v` enforced strictly, no build metadata. |
+| B-11 | High | Dependencies unchecked: junk keys (`../../etc/x`), 60+ entries, nonexistent, self-dependency; `MAX_DEPENDENCIES` unused | Resolved in 2192be4. Checked against regex, non-removed existence, cycles, depth <= 10. |
+| B-12 | High | `repository: "javascript:alert(1)"`, arbitrary `compatibility`, unvalidated SKILL.md frontmatter, 3 MB SKILL.md accepted | Resolved in 2192be4. Manifest schema and SKILL.md YAML validation enforced. |
+| B-13 | High | Manifest confusion: `skill.json` accepted at depth 1 or 2; names trimmed; no header checksum or duplicate checks | Resolved in 2192be4. Strict archive root/single-wrapper layout, checksum validation, duplicate detection. |
+| B-14 | High | Publish not atomic: R2 put first, separate D1 inserts; concurrent same-name publish can overwrite the R2 object; failures leave orphans | Resolved in ce87342. Conditional R2 put + atomic D1 batch + rollback on failure; reserve-first fallback handled per D-009. |
+| B-15 | High | No publish rate limit (15 publishes -> all 201); in-memory limiter is per isolate; `x-forwarded-for` fallback | Resolved in 26557cf & 429065c. Durable Object rate limiter with sliding window, cf-connecting-ip only. |
+| B-16 | High | CORS `*` + credentials reflects any origin; localhost allowed in production by default; base config `ENVIRONMENT=development` weakens cookies | Resolved in 79fd970 & b56292b. Strict CORS allowlist, env.production, Secure cookies outside dev. |
+| B-17 | High | No CSRF Origin check: token mint with `Origin: https://evil.example` -> 201 | Resolved in b56292b. Exact match Origin/Referer checked on cookie-authenticated mutations. |
+| B-18 | High | An API token can mint further tokens; no expiry, count limit or scope | Resolved in 98ec714. Session required for token minting, max 20 active tokens, 90-day expiry. |
+| B-19 | High | Yank is a toggle: the same request twice un-yanks | Resolved in 1d90ea1. POST is idempotent yank; DELETE un-yanks. |
+| B-20 | High | `onError` returns `err.message` (leaks internals) | Resolved in b56292b. Generic error in production with logged requestId. |
+| B-21 | Medium | Search N+1 (up to 101 D1 queries/request); `LIKE` wildcards unescaped; latest via per-row sort; prereleases counted | Resolved in 72c6a6b. Joined query using latest_version, escaped LIKE wildcards. |
+| B-22 | Medium | Downloads buffer the whole object, count every request, `immutable` cache even for yanked | Resolved in 72c6a6b & d6e2fa9. Streamed R2 body, ETag 304, download_dedupe table with daily hash. |
+| B-23 | Medium | Reports: raw IP stored, `details` unbounded, `version` unvalidated | Resolved in 72c6a6b & d6e2fa9. Reporter IP salted & hashed (HASH_SALT), details capped at 2000 chars. |
+| B-24 | Medium | OAuth/sessions: `user:email` requested but unused; session ids plaintext in DB; expired sessions never deleted; handle rename can hit UNIQUE -> 500; `SESSION_SECRET` unused | Resolved in 9a2d6cf. sha256 hashed session ids, expired cleanup on lookup, user:email scope removed. |
+| B-25 | Medium | Publishing an older version overwrites skill-level description/readme | Resolved in ce87342. Only highest stable version updates package-level metadata. |
+| B-26 | Low | wrangler 3 outdated; runtime `zod` high advisory; junk `allowBuilds` placeholder in pnpm-workspace.yaml; placeholder `database_id`; README `file:///home/ankurgupta/...` link; tests need Node >= 22.5 with no `engines`/CI | Resolved in d2dd00f & 79fd970. Wrangler 4, engines >= 22.5, workspace cleaned. Production database_id placeholder documented. |
+| B-27 | Medium | All tests run on Node with mocks; nothing exercises workerd, real D1 batch/limits, R2 conditional puts or Durable Objects | In progress: REG-37 `pnpm test:integration` script against local workerd + D1/R2 to be completed in Branch 1. |
+| B-28 | Medium | The registry has never been run against the real CLI (v1.0.0 was tested against a mock only) | In progress: REG-38 `pnpm conformance` script to be implemented in Branch 10 against built `../skillapt` CLI. |
+| B-29 | Low | GitHub logins can be up to 39 chars and legacy ones contain consecutive hyphens, but the scope rule is 2..30 chars without `--` (see D-011) | Resolved in 2192be4 per D-011. Logins not matching scope criteria claim no scope. |
 
 ---
 
@@ -348,7 +348,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 - [ ] **REG-34** Prepare, but do not run, the production rollout: `docs/DEPLOY.md` with exact commands (create D1 and R2, set `database_id`, `wrangler d1 migrations apply DB --remote --env production`, `wrangler secret put ...`, `wrangler deploy --env production`, custom domain, GitHub OAuth app callback `https://registry.skillapt.dev/v1/auth/github/callback`, bootstrap first admin) and `scripts/post-deploy-check.sh` (health, anonymous search, authenticated publish of a test skill with a token passed via env, download hash check).
 - [ ] **REG-39** `docs/RUNBOOK.md`: incident procedure for malware (takedown -> audit -> notice -> postmortem), D1 export/backup schedule, R2 versioning, `wrangler rollback`, secret and token rotation, alerting on 5xx rate and publish failures, how to take the registry read-only.
 - [ ] **REG-35** (HUMAN) Run DEPLOY.md and `post-deploy-check.sh`, then the CLI acceptance demo (§16.8) against production; record results in §13.
-- [ ] **REG-36** (HUMAN) Tag `v1.1.0` after REG-35 passes.
+- [ ] **REG-36** (HUMAN) Tag `v1.2.0` after REG-35 passes (tag `v1.1.0` already exists at commit 027fac8 per D-012).
 
 ---
 
@@ -392,31 +392,43 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | D-004 | 2026-11-15 | SKILL.md `name` must equal the on-disk folder name; files are never rewritten | accepted (applied in CLI v1.0.0) |
 | D-005 | 2026-11-15 | Agent paths per §3.6 (CLI agent reported verifying Antigravity and Codex against vendor docs) | accepted; human to re-verify before launch |
 | D-006 | (pending) | Allow images/PDF/fonts only with magic-byte-matches-extension | open |
-| D-007 | 2026-11-15 | Admin authorization is role-based (`users.role`), replacing the SPEC's `X-Admin-Token` idea | proposed (default applies) |
-| D-008 | 2026-11-15 | Rate limiting via Durable Object (supports hourly/daily windows), not the Workers Rate Limiting binding (10/60 s periods only) | proposed (default applies) |
-| D-009 | 2026-11-15 | Publish uses R2 create-only put. If real R2 does not honor `onlyIf: {etagDoesNotMatch:"*"}`, use reserve-first: insert the `skill_versions` row with a pending status first (UNIQUE guards), then put to R2, then finalize in one batch; cron removes stale pending rows | proposed; verify on real R2 |
-| D-010 | 2026-11-15 | Integration tests use a script on `wrangler dev --local` (real workerd + local D1/R2), not `@cloudflare/vitest-pool-workers`, to avoid version-compat risk | proposed |
-| D-011 | 2026-11-15 | Accounts whose GitHub login is not a valid scope (> 30 chars, consecutive hyphens, 1 char) get no scope and publish unscoped names only. Raising the scope limit to 39 would need a change in both repos | proposed; human decides |
+| D-007 | 2026-11-15 | Admin authorization is role-based (`users.role`), replacing the SPEC's `X-Admin-Token` idea | accepted |
+| D-008 | 2026-11-15 | Rate limiting via Durable Object (supports hourly/daily windows), not the Workers Rate Limiting binding (10/60 s periods only) | accepted |
+| D-009 | 2026-11-15 | Publish uses R2 create-only put. If real R2 does not honor `onlyIf: {etagDoesNotMatch:"*"}`, use reserve-first: insert the `skill_versions` row with a pending status first (UNIQUE guards), then put to R2, then finalize in one batch; cron removes stale pending rows | accepted; verify on real R2 |
+| D-010 | 2026-11-15 | Integration tests use a script on `wrangler dev --local` (real workerd + local D1/R2), not `@cloudflare/vitest-pool-workers`, to avoid version-compat risk | accepted |
+| D-011 | 2026-11-15 | Accounts whose GitHub login is not a valid scope (> 30 chars, consecutive hyphens, 1 char) get no scope and publish unscoped names only. Raising the scope limit to 39 would need a change in both repos | accepted |
+| D-012 | 2026-11-15 | Tag v1.1.0 already exists in repo history (commit 027fac8); target registry release version bumped from v1.1.0 to v1.2.0 | accepted |
 
 ## 12. Open questions / blockers (ask the human; do not guess)
 - Q1: Who owns the Cloudflare account and the `skillapt.dev` domain? Is anything deployed?
-- Q2: Accept D-007 to D-011 or change them?
+- Q2: Accept D-007 to D-011 or change them? -> Accepted per user instruction. D-012 added for target v1.2.0.
 - Q3: Which GitHub account is the first admin?
 - Q4: GitHub OAuth app: callback URL and credentials (human creates; never in the repo).
 - Q5: Tarball signing/provenance is out of scope for 1.x; confirm.
 - Q6: Any CLI/registry mismatch found by REG-38 that needs a CLI change goes here with details.
+- Q7 (Reconciled State / Human Decisions):
+  - `wrangler.jsonc`:
+    - Production `database_id` is `"00000000-0000-0000-0000-000000000000"`. Human needs to run `wrangler d1 create skillapt-db-prod` and supply real UUID before production deployment.
+    - Routes pattern: `"registry.skillapt.dev"` with `"custom_domain": true`.
+    - DO binding name in `wrangler.jsonc` is `"RATE_LIMITER_DO"`; middleware accommodates both `RATE_LIMITER_DO` namespace and `RATE_LIMITER` test mock.
+  - Workflows:
+    - `.github/workflows/deploy.yml`: Had trigger `workflow_run` (on CI on `main`). Changed to `workflow_dispatch` only in `fix/worker-startup-and-config` first commit to prevent unintended auto-deployments.
+    - `.github/workflows/pages.yml`: Deploys Redoc documentation to GitHub Pages on push to `main`.
+  - Dependencies:
+    - Zod was bumped to `4.6.7` in commit `456765d` (PR #6) with compatibility fix in `3ea64c5`. Stays on 4.x per "build on what exists; do not revert it". No further zod PRs will be merged until a dedicated migration.
 
 ## 13. Progress log (append only, newest last)
 
 | Date | Agent/Author | Branch | Tasks | Result | Next |
 |---|---|---|---|---|---|
 | 2026-11-15 | audit | (none) | baseline | 29 findings recorded (§6); 59/59 tests on Node; workerd start fails | start REG-01 on `fix/worker-startup-and-config` |
+| 2026-11-15 | agent | docs/plan-reconcile | Step 0 re-baseline | Reconciled PLAN.md with tag v1.1.0, GitHub Actions & Pages workflows, updated wrangler bindings, D-012 (target v1.2.0), and updated task dashboard | merge to main, then start Branch 1 |
 
 ---
 
 ## 14. Definition of done
 
-All tasks in §7 are `[x]` (REG-35/36 by the human), every branch is merged into `main` with merge commits and still exists on GitHub, CI is green, the conformance run and the production acceptance demo (§16.8) passed, `v1.1.0` is tagged and deployed, and §1 reflects it.
+All tasks in §7 are `[x]` (REG-35/36 by the human), every branch is merged into `main` with merge commits and still exists on GitHub, CI is green, the conformance run and the production acceptance demo (§16.8) passed, `v1.2.0` is tagged and deployed, and §1 reflects it.
 
 The finished registry looks like this:
 - A Worker at `https://registry.skillapt.dev/v1` that starts on workerd, with `/v1/health` green and production and development cleanly separated.
@@ -564,4 +576,4 @@ Rejections users will see: publishing `@bob/x` as `alice` -> 403; a skill contai
 4. In a clean project: `skillapt install @you/test-skill --target antigravity --target claude` creates the folders, lockfile and links; `--frozen` reproduces it.
 5. Attack checks all fail: path-traversal `skill.json` name (GitHub install), ELF in `.py`, PAX path trick, hidden dir, `v1.0.0`/`1.0.0+x`, token sent to another origin, same yank twice.
 6. Admin takes the test version down -> download returns 410, `install` refuses it, the audit log has the entry.
-7. `git branch -a` shows every branch from the plans, all merged into `main`, none deleted; CI green; `v1.0.0` (CLI) and `v1.1.0` (registry) tagged.
+7. `git branch -a` shows every branch from the plans, all merged into `main`, none deleted; CI green; `v1.0.0` (CLI) and `v1.2.0` (registry) tagged.
