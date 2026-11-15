@@ -5,6 +5,19 @@ All notable changes to the Skillapt Registry will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-15
+
+### Added
+- **Real workerd Integration Testing**: Added `pnpm test:integration` executing 14 full HTTP lifecycle scenarios on a local workerd runtime with local D1, R2, and Durable Objects.
+- **CLI Contract Conformance Test Suite**: Added `pnpm conformance` (`scripts/conformance.mjs`) driving the real CLI v1.0.0 through all operations (doctor, search, init, pack, publish, info, install, --frozen, yank, un-yank, outdated, update, admin takedown) and 5 direct attack tarballs.
+- **Scheduled Cron Cleanup**: Added daily Cloudflare cron trigger (`0 0 * * *`) executing `handleScheduled` to purge expired web sessions, old download deduplication rows (> 2 days), and expired API tokens.
+- **Scoped Package On-Disk Conformance**: Conformed `src/validation/tar.ts` to accept `scope--name` for SKILL.md frontmatter names alongside unscoped names per Decision D-004.
+- **Comprehensive Production Deployment & Operations Guides**: Added `docs/DEPLOY.md`, `docs/RUNBOOK.md`, and `scripts/post-deploy-check.sh` for production rollout and incident response.
+
+### Changed
+- **Tooling & Engine Upgrades**: Upgraded Wrangler to v4 (`^4.160.0`), enforced `engines.node` `>=22.5`, and removed placeholder build configurations in `pnpm-workspace.yaml`.
+- **CI & Deployment Hardening**: Added workerd integration tests and dry-run production deployment (`--env production`) to GitHub Actions CI; changed deployment workflows to manual trigger (`workflow_dispatch`).
+
 ## [1.1.0] - 2026-11-11
 
 ### Added

@@ -35,8 +35,50 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod
 
-      - name: Wrangler deploy dry-run
-        run: npx wrangler deploy --dry-run
+      - name: Wrangler deploy dry-run (production env)
+        run: npx wrangler deploy --dry-run --env production
 
       - name: Workerd smoke test
         run: pnpm smoke
+
+      - name: Workerd integration tests
+        run: pnpm test:integration
+
+  conformance:
+    name: CLI Contract Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout registry repository
+        uses: actions/checkout@v7
+        with:
+          path: registry
+
+      - name: Checkout CLI repository (if available)
+        uses: actions/checkout@v7
+        with:
+          repository: Ankur17nith/skillapt
+          ref: v1.0.0
+          path: skillapt
+        continue-on-error: true
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Run CLI Conformance Test
+        run: |
+          if [ -d "skillapt" ] && [ -f "skillapt/package.json" ]; then
+            cd skillapt
+            pnpm install --frozen-lockfile || pnpm install
+            pnpm build
+            cd ../registry
+            pnpm install --frozen-lockfile
+            SKILLAPT_CLI_DIR=$GITHUB_WORKSPACE/skillapt pnpm conformance
+          else
+            echo "CLI repository checkout not available; skipping conformance job cleanly."
+          fi

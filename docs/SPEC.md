@@ -1,6 +1,6 @@
 # Skillapt Registry Specification
 
-> **Version**: 1.1.0  
+> **Version**: 1.2.0  
 > **Status**: Approved Specification for Registry, CLI, and Web UI  
 > **Target Platform**: Cloudflare Workers (TypeScript, Hono, D1 SQLite, R2 Object Storage)  
 > **Branding Rule**: The product name lives in exactly one constant: `PRODUCT_NAME = "skillapt"` in `src/config.ts`.
@@ -64,7 +64,7 @@ Every skill package is distributed as a gzip-compressed tar archive (`.tar.gz` o
 `SKILL.md` is the primary interface between the package and the consuming AI agent. It **MUST** begin with valid YAML frontmatter demarcated by triple dashes (`---`).
 
 - **Required Frontmatter Keys**:
-  - `name`: Must match the **unscoped** package name specified in `skill.json` (e.g. for package `@alice/pdf-tool`, frontmatter `name` must be `pdf-tool`).
+  - `name`: Must match the **unscoped** package name specified in `skill.json` (or the flat on-disk folder name `scope--name` for scoped packages per D-004; e.g. for package `@alice/pdf-tool`, frontmatter `name` can be `pdf-tool` or `alice--pdf-tool`).
   - `description`: A clear, single-sentence summary of what the skill enables for the agent.
 - **Content Limits**:
   - Minimum size: 10 non-whitespace characters.
