@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { setCookie, getCookie, deleteCookie } from "hono/cookie";
-import { computeSha256 } from "../utils/crypto";
+import { computeSha256, timingSafeEqual } from "../utils/crypto";
 import type { Env } from "../types";
 
 export const authRouter = new Hono<{ Bindings: Env }>();
@@ -59,7 +59,7 @@ authRouter.get("/github/callback", async (c) => {
   const state = c.req.query("state");
   const cookieState = getCookie(c, "oauth_state");
 
-  if (!code || !state || !cookieState || state !== cookieState) {
+  if (!code || !state || !cookieState || !timingSafeEqual(state, cookieState)) {
     return c.json(
       {
         error: {

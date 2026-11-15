@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { getCookie, deleteCookie } from "hono/cookie";
-import { computeSha256 } from "../utils/crypto";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { computeSha256, timingSafeEqual } from "../utils/crypto";
+import { checkRateLimit } from "../middleware/rate-limit";
 import type { Env } from "../types";
 
 export const dashboardRouter = new Hono<{ Bindings: Env }>();
@@ -23,6 +24,36 @@ function generateRandomHex(bytesCount = 16): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+const FLASH_TOKEN_COOKIE = "skillapt_flash_token";
+const FLASH_ERROR_COOKIE = "skillapt_flash_error";
+
+/**
+ * One-shot messages travel in short-lived HttpOnly cookies, never in the URL:
+ * a freshly minted API token in a query string would end up in browser history
+ * and request logs, and a crafted link could forge the "token created" banner.
+ */
+function setFlash(c: Context<{ Bindings: Env }>, name: string, value: string): void {
+  setCookie(c, name, value, {
+    path: "/dashboard",
+    httpOnly: true,
+    secure: c.env?.ENVIRONMENT !== "development",
+    sameSite: "Lax",
+    maxAge: 120
+  });
+}
+
+function takeFlash(c: Context<{ Bindings: Env }>, name: string): string | undefined {
+  const value = getCookie(c, name);
+  if (value !== undefined) {
+    deleteCookie(c, name, { path: "/dashboard" });
+  }
+  return value || undefined;
+}
+
+function csrfMatches(provided: unknown, expected: string): boolean {
+  return typeof provided === "string" && provided.trim() !== "" && timingSafeEqual(provided.trim(), expected);
 }
 
 async function getCsrfToken(sessionHash: string): Promise<string> {
@@ -107,8 +138,8 @@ dashboardRouter.get("/", async (c) => {
   }
 
   const csrfToken = await getCsrfToken(user.sessionHash);
-  const createdToken = c.req.query("created");
-  const errorMessage = c.req.query("error");
+  const createdToken = takeFlash(c, FLASH_TOKEN_COOKIE);
+  const errorMessage = takeFlash(c, FLASH_ERROR_COOKIE);
 
   const tokensResult = await c.env.DB.prepare(`
     SELECT id, name, prefix, expires_at, created_at, last_used_at
@@ -130,7 +161,7 @@ dashboardRouter.get("/", async (c) => {
         <td>
           <form method="POST" action="/dashboard/tokens/${escapeHtml(t.id)}/revoke" style="margin: 0;">
             <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}" />
-            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Revoke this token?');">Revoke</button>
+            <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
           </form>
         </td>
       </tr>
@@ -250,16 +281,29 @@ dashboardRouter.post("/tokens", async (c) => {
   }
 
   const body = await c.req.parseBody();
-  const csrfToken = (body.csrf_token as string)?.trim();
   const expectedCsrf = await getCsrfToken(user.sessionHash);
 
-  if (!csrfToken || csrfToken !== expectedCsrf) {
+  if (!csrfMatches(body.csrf_token, expectedCsrf)) {
     return c.text("CSRF token verification failed.", 403);
   }
 
   const name = (body.name as string)?.trim();
   if (!name || name.length < 1 || name.length > 50) {
-    return c.redirect("/dashboard?error=" + encodeURIComponent("Token name must be between 1 and 50 characters."));
+    setFlash(c, FLASH_ERROR_COOKIE, "Token name must be between 1 and 50 characters.");
+    return c.redirect("/dashboard");
+  }
+
+  // Same budget as POST /v1/tokens (10 per day per user) so the dashboard form
+  // is not a way around it.
+  const withinBudget = await checkRateLimit(
+    c,
+    `token_create:${user.userId}`,
+    24 * 60 * 60 * 1000,
+    10
+  );
+  if (!withinBudget) {
+    setFlash(c, FLASH_ERROR_COOKIE, "Too many tokens created today. Please try again tomorrow.");
+    return c.redirect("/dashboard");
   }
 
   const now = new Date().toISOString();
@@ -268,7 +312,8 @@ dashboardRouter.post("/tokens", async (c) => {
   ).bind(user.userId, now).first<number>("count")) ?? 0;
 
   if (activeCount >= 20) {
-    return c.redirect("/dashboard?error=" + encodeURIComponent("Maximum limit of 20 active tokens reached. Revoke an existing token first."));
+    setFlash(c, FLASH_ERROR_COOKIE, "Maximum limit of 20 active tokens reached. Revoke an existing token first.");
+    return c.redirect("/dashboard");
   }
 
   const randomHex = generateRandomHex(16);
@@ -283,7 +328,8 @@ dashboardRouter.post("/tokens", async (c) => {
     VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
   `).bind(tokenId, user.userId, name, prefix, tokenHash, expiresAt, now).run();
 
-  return c.redirect(`/dashboard?created=${encodeURIComponent(rawToken)}`);
+  setFlash(c, FLASH_TOKEN_COOKIE, rawToken);
+  return c.redirect("/dashboard");
 });
 
 // POST /dashboard/tokens/:id/revoke - Revoke token from dashboard
@@ -294,10 +340,9 @@ dashboardRouter.post("/tokens/:id/revoke", async (c) => {
   }
 
   const body = await c.req.parseBody();
-  const csrfToken = (body.csrf_token as string)?.trim();
   const expectedCsrf = await getCsrfToken(user.sessionHash);
 
-  if (!csrfToken || csrfToken !== expectedCsrf) {
+  if (!csrfMatches(body.csrf_token, expectedCsrf)) {
     return c.text("CSRF token verification failed.", 403);
   }
 
@@ -314,10 +359,9 @@ dashboardRouter.post("/logout", async (c) => {
   const user = await getAuthenticatedUser(c);
   if (user) {
     const body = await c.req.parseBody();
-    const csrfToken = (body.csrf_token as string)?.trim();
     const expectedCsrf = await getCsrfToken(user.sessionHash);
 
-    if (csrfToken && csrfToken === expectedCsrf) {
+    if (csrfMatches(body.csrf_token, expectedCsrf)) {
       await c.env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(user.sessionHash).run();
       deleteCookie(c, "skillapt_session", { path: "/" });
     }

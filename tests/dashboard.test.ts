@@ -3,6 +3,7 @@ import { app } from "../src/index";
 import { MockD1Database } from "./helpers/mock-d1";
 import { MockR2Bucket } from "./helpers/mock-r2";
 import { computeSha256 } from "../src/utils/crypto";
+import { resetRateLimits } from "../src/middleware/rate-limit";
 import type { Env } from "../src/types";
 
 describe("Branch 6: Token Dashboard (/dashboard)", () => {
@@ -11,6 +12,7 @@ describe("Branch 6: Token Dashboard (/dashboard)", () => {
   const rawSession = "ses_dash_test_user";
 
   beforeEach(async () => {
+    resetRateLimits();
     mockDb = new MockD1Database();
     mockDb.applyMigrations();
     mockDb.applySeed();
@@ -98,7 +100,21 @@ describe("Branch 6: Token Dashboard (/dashboard)", () => {
     );
     expect(validRes.status).toBe(302);
     const location = validRes.headers.get("Location");
-    expect(location).toContain("/dashboard?created=apt_live_");
+    // The new token must never appear in the URL (history, logs, forged links).
+    expect(location).toBe("/dashboard");
+    const setCookie = validRes.headers.get("Set-Cookie") || "";
+    expect(setCookie).toMatch(/skillapt_flash_token=apt_live_[0-9a-f]{32}/);
+    expect(setCookie).toMatch(/HttpOnly/i);
+
+    // The token is shown exactly once, then the flash cookie is cleared.
+    const flashValue = /skillapt_flash_token=([^;]+)/.exec(setCookie)![1];
+    const shown = await app.request(
+      "/dashboard",
+      { headers: { Cookie: `skillapt_session=${rawSession}; skillapt_flash_token=${flashValue}` } },
+      env
+    );
+    expect(await shown.text()).toContain(flashValue);
+    expect(shown.headers.get("Set-Cookie") || "").toMatch(/skillapt_flash_token=;/);
 
     // Token exists in database
     const tokenRow = await mockDb.prepare("SELECT * FROM api_tokens WHERE name = 'new-dash-token'").first<any>();
@@ -154,5 +170,44 @@ describe("Branch 6: Token Dashboard (/dashboard)", () => {
 
     const sessionRow = await mockDb.prepare("SELECT * FROM sessions WHERE id = ?").bind(sessionHash).first<any>();
     expect(sessionRow).toBeNull();
+  });
+
+  it("ignores forged ?created= and ?error= query parameters", async () => {
+    const res = await app.request(
+      "/dashboard?created=apt_live_forged&error=Your%20account%20is%20locked",
+      { headers: { Cookie: `skillapt_session=${rawSession}` } },
+      env
+    );
+    const html = await res.text();
+    expect(html).not.toContain("apt_live_forged");
+    expect(html).not.toContain("Your account is locked");
+    expect(html).not.toContain("New Token Created");
+  });
+
+  it("applies the daily token creation budget to the dashboard form", async () => {
+    const sessionHash = await computeSha256(new TextEncoder().encode(rawSession));
+    const csrfToken = await computeSha256(new TextEncoder().encode(`csrf:${sessionHash}`));
+    const post = () =>
+      app.request(
+        "/dashboard/tokens",
+        {
+          method: "POST",
+          headers: {
+            Cookie: `skillapt_session=${rawSession}`,
+            "Content-Type": "application/x-www-form-urlencoded"
+          },
+          body: new URLSearchParams({ csrf_token: csrfToken, name: "burst" }).toString()
+        },
+        env
+      );
+    for (let i = 0; i < 10; i++) await post();
+    const blocked = await post();
+    const cookie = blocked.headers.get("Set-Cookie") || "";
+    expect(cookie).toContain("skillapt_flash_error=");
+    expect(cookie).not.toContain("skillapt_flash_token=");
+    const count = await mockDb
+      .prepare("SELECT COUNT(*) as c FROM api_tokens WHERE name = 'burst'")
+      .first<{ c: number }>();
+    expect(count!.c).toBe(10);
   });
 });

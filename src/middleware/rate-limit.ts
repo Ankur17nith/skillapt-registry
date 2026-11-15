@@ -29,6 +29,21 @@ function resolveRateLimiter(c: Context<{ Bindings: Env }>): RateLimiter {
   return defaultInMemoryLimiter;
 }
 
+/**
+ * Imperative rate-limit check for handlers that cannot use the middleware
+ * (for example because the key depends on the authenticated user).
+ * Returns true when the request is allowed.
+ */
+export async function checkRateLimit(
+  c: Context<{ Bindings: Env }>,
+  key: string,
+  windowMs: number,
+  maxRequests: number
+): Promise<boolean> {
+  const result = await resolveRateLimiter(c).check(key, windowMs, maxRequests);
+  return result.allowed;
+}
+
 export function rateLimit(options: RateLimitOptions) {
   const { windowMs, maxRequests, keyGenerator } = options;
 
