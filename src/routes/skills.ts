@@ -4,6 +4,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import semver from "semver";
 import { inspectAndValidateTarball } from "../validation/tar";
 import { computeSha256 } from "../utils/crypto";
+import { hashClientIp } from "../utils/salt";
 import { requireAuth } from "../middleware/auth";
 import { rateLimit, getClientIp } from "../middleware/rate-limit";
 import { LIMITS } from "../config";
@@ -1023,8 +1024,7 @@ skillsRouter.on(
     const hasRange = Boolean(c.req.header("range"));
     if (!isHead && !hasRange) {
       const clientIp = getClientIp(c);
-      const salt = c.env.REPORT_SALT || "skillapt-default-salt";
-      const ipHash = await computeSha256(new TextEncoder().encode(clientIp + salt));
+      const ipHash = await hashClientIp(c.env, clientIp);
       const day = new Date().toISOString().slice(0, 10);
 
       try {

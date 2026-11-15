@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { rateLimit, getClientIp } from "../middleware/rate-limit";
-import { computeSha256 } from "../utils/crypto";
+import { hashClientIp } from "../utils/salt";
 import type { Env } from "../types";
 
 export const reportsRouter = new Hono<{ Bindings: Env }>();
@@ -124,8 +124,7 @@ reportsRouter.post("/", async (c) => {
   }
 
   const reporterIp = getClientIp(c);
-  const salt = c.env.REPORT_SALT || "skillapt-default-salt";
-  const reporterHash = await computeSha256(new TextEncoder().encode(reporterIp + salt));
+  const reporterHash = await hashClientIp(c.env, reporterIp);
 
   const reportId = generateReportId();
   const now = new Date().toISOString();

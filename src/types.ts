@@ -11,6 +11,9 @@ export interface Env {
   PUBLIC_ORIGIN?: string;
   RATE_LIMITER_DO?: DurableObjectNamespace;
   RATE_LIMITER?: RateLimiter;
+  /** Secret salt for hashing client IPs (preferred name). */
+  HASH_SALT?: string;
+  /** Legacy name for HASH_SALT. */
   REPORT_SALT?: string;
 }
 
