@@ -57,10 +57,10 @@
 
 | Field | Value |
 |---|---|
-| Last updated | 2026-11-15 (Branch 10 CLI conformance complete; next: docs/ci-spec-sync) |
-| Current milestone | M3: Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance (complete) |
-| Current branch | `test/cli-contract-conformance` (next: `docs/ci-spec-sync`) |
-| Current task | REG-38 done; starting Branch 11 (REG-31, REG-32, REG-33) |
+| Last updated | 2026-11-15 (Branch 11 docs/ci-spec-sync complete; next: chore/production-deploy) |
+| Current milestone | M4: Docs, CI, production-ready package (in progress) |
+| Current branch | `docs/ci-spec-sync` (next: `chore/production-deploy`) |
+| Current task | REG-31, REG-32, REG-33 done; starting Branch 12 (REG-34, REG-39) |
 | Baseline | `tsc` clean; 153/153 vitest tests pass; `pnpm smoke`, `pnpm test:integration` (14 scenarios) & `pnpm conformance` (12 CLI + 5 attack scenarios) pass on workerd |
 | Deployed | Tag `v1.1.0` exists at commit `027fac8`. Target release bumped to `v1.2.0` (D-012). Production `database_id` in wrangler.jsonc is a placeholder (`00000000-0000-0000-0000-000000000000`) |
 | Dependencies | `pnpm audit --prod`: 0 vulnerabilities; `zod` is at 4.6.7 (PR #6 merged, remains per policy "build on what exists; do not revert it"; no further zod PRs); vitest 5.1.0, workers-types 5.20261108.1, hono 4.13.17, wrangler 4.160.0 |
@@ -71,7 +71,7 @@
 | M1 | Worker runs on Cloudflare; publish validation closed (scope, names, binaries, versions, dependencies); workerd integration tests | [x] |
 | M2 | Atomic publish, takedown/status, auth/CSRF/CORS hardening, token dashboard | [x] |
 | M3 | Real rate limits, search/download performance, seed and test hygiene, cron cleanup, CLI conformance | [x] |
-| M4 | Docs/CI sync and production-ready deploy package (human deploys) | [ ] |
+| M4 | Docs/CI sync and production-ready deploy package (human deploys) | [~] |
 
 ---
 
@@ -340,9 +340,9 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 ### M4. Docs, CI, production-ready package
 
 #### Branch `docs/ci-spec-sync`
-- [ ] **REG-31** `.github/workflows/ci.yml`: Node 22, `pnpm install --frozen-lockfile`, typecheck, test, `pnpm audit --prod`, `wrangler deploy --dry-run --env production`, `pnpm smoke`, `pnpm test:integration`; optional job running `pnpm conformance` against the CLI repo; `dependabot.yml`.
-- [ ] **REG-32** Sync `docs/SPEC.md` and `docs/openapi.yaml` with what is implemented (status column, role-based admin instead of `X-Admin-Token`, idempotent yank + DELETE, `integrity`, rate limits, CSRF, shared allowlist, dashboard). Anything not implemented is marked "planned".
-- [ ] **REG-33** README: remove the `file:///home/ankurgupta/...` link and "completely independent of npm"; correct deploy steps; document the dashboard login flow, vars and secrets (§4.4). Add SECURITY.md, CHANGELOG.md, CODEOWNERS.
+- [x] **REG-31** `.github/workflows/ci.yml`: Node 22, `pnpm install --frozen-lockfile`, typecheck, test, `pnpm audit --prod`, `wrangler deploy --dry-run --env production`, `pnpm smoke`, `pnpm test:integration`; optional job running `pnpm conformance` against the CLI repo; `dependabot.yml`.
+- [x] **REG-32** Sync `docs/SPEC.md` and `docs/openapi.yaml` with what is implemented (status column, role-based admin instead of `X-Admin-Token`, idempotent yank + DELETE, `integrity`, rate limits, CSRF, shared allowlist, dashboard). Anything not implemented is marked "planned".
+- [x] **REG-33** README: remove the `file:///home/ankurgupta/...` link and "completely independent of npm"; correct deploy steps; document the dashboard login flow, vars and secrets (§4.4). Add SECURITY.md, CHANGELOG.md, CODEOWNERS.
 
 #### Branch `chore/production-deploy`
 - [ ] **REG-34** Prepare, but do not run, the production rollout: `docs/DEPLOY.md` with exact commands (create D1 and R2, set `database_id`, `wrangler d1 migrations apply DB --remote --env production`, `wrangler secret put ...`, `wrangler deploy --env production`, custom domain, GitHub OAuth app callback `https://registry.skillapt.dev/v1/auth/github/callback`, bootstrap first admin) and `scripts/post-deploy-check.sh` (health, anonymous search, authenticated publish of a test skill with a token passed via env, download hash check).
@@ -428,6 +428,7 @@ Create `tests/security/publish-attacks.test.ts` reproducing each attack in this 
 | 2026-11-15 | agent | fix/worker-startup-and-config | REG-37, workflow triggers | Disabled auto-deploy in deploy.yml/pages.yml, implemented test-integration.mjs running 14 real workerd scenarios | merge to main, then start Branch 8 cron |
 | 2026-11-15 | agent | fix/search-download-reports | REG-42 | Implemented daily cron trigger in wrangler.jsonc, exported scheduled handler in src/index.ts, and added unit tests | merge to main, then Branch 10 conformance |
 | 2026-11-15 | agent | test/cli-contract-conformance | REG-38 | Implemented scripts/conformance.mjs and pnpm conformance; verified all 12 CLI scenarios (doctor, search, init, pack, publish, info, install, --frozen, yank, un-yank, outdated/update, takedown refusal) and 5 attack tarballs pass | merge to main, then Branch 11 docs/ci-spec-sync |
+| 2026-11-15 | agent | docs/ci-spec-sync | REG-31, REG-32, REG-33 | Updated ci.yml (test:integration, wrangler deploy --env production, conformance job), synced SPEC.md, openapi.yaml, README.md (vars, secrets, dashboard flow), SECURITY.md, and CHANGELOG.md | merge to main, then Branch 12 chore/production-deploy |
 
 ---
 

@@ -32,10 +32,12 @@ The branding and product name lives in exactly one constant: [`PRODUCT_NAME`](sr
    - Web sessions: GitHub OAuth 2.0 with HTTP-only, secure, SameSite cookies and CSRF origin verification on mutating requests.
    - Web Dashboard (`/dashboard`): Server-rendered HTML dashboard with strict CSP (`script-src 'none'`) and CSRF protection for managing personal access tokens.
    - CLI operations: Personal access tokens (`apt_live_...`). Generating and revoking tokens requires an active web session. Raw tokens are shown **only once** upon generation; the database stores exclusively the SHA-256 hash.
-   - CLI login flow:
+   - **Dashboard Login & Token Flow**:
      1. Visit `https://registry.skillapt.dev/dashboard` (or `http://localhost:8787/dashboard` in development).
-     2. Sign in with GitHub.
-     3. Generate a token, copy it, and configure your CLI via `skillapt config set token <token>`.
+     2. Click "Sign in with GitHub" to authenticate via GitHub OAuth.
+     3. Once redirected to the Dashboard, enter a token name and click "Create API Token".
+     4. Copy the generated token (`apt_live_...`) immediately (it is displayed only once).
+     5. Authenticate the CLI using `skillapt login --token-stdin < token.txt` (or pass the token interactively).
 8. **Durable Object Rate Limiting**:
    - Sliding-window rate limiting enforced globally using Cloudflare Durable Objects (`RateLimiterDO`).
    - Tracks client IP using `cf-connecting-ip`.
@@ -185,13 +187,21 @@ Ensure the following bindings are configured in [`wrangler.jsonc`](wrangler.json
 npx wrangler d1 migrations apply DB --remote
 ```
 
-### 4. Configure Production Secrets
-Never commit secrets to git. Inject them securely via Wrangler into production:
+### 4. Configure Production Environment Variables & Secrets
+Never commit secrets to git.
+
+**Environment Variables** (configured in `wrangler.jsonc` under `env.production.vars`):
+- `ENVIRONMENT`: Set to `"production"` (enforces HTTPS cookies, disables localhost CORS).
+- `PUBLIC_ORIGIN`: Canonical public URL of the registry (e.g. `"https://registry.skillapt.dev"`).
+- `CORS_ORIGIN`: Allowed origins for cross-origin browser requests (e.g. `"https://skillapt.dev"`).
+
+**Secrets** (injected securely via Wrangler into production):
 ```bash
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
-npx wrangler secret put REPORT_SALT
+npx wrangler secret put GITHUB_CLIENT_ID --env production
+npx wrangler secret put GITHUB_CLIENT_SECRET --env production
+npx wrangler secret put HASH_SALT --env production
 ```
+*(Note: `HASH_SALT` is a cryptographically secure random string used to compute salted SHA-256 hashes of client IPs for download deduplication and abuse reporting).*
 
 ### 5. Bootstrap the First Admin User
 After signing in via GitHub OAuth, elevate your user to admin role:

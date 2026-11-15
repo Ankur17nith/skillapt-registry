@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Skillapt Registry API
-  version: 1.1.0
+  version: 1.2.0
   description: >
     The official REST API for the skillapt package manager and registry for AI agent skills.
     Skillapt is an independent package registry built for discovering, publishing, and
