@@ -9,6 +9,8 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   CORS_ORIGIN?: string;
   PUBLIC_ORIGIN?: string;
+  /** "true" rejects all mutating requests with 503 (read-only maintenance). */
+  MAINTENANCE_MODE?: string;
   RATE_LIMITER_DO?: DurableObjectNamespace;
   RATE_LIMITER?: RateLimiter;
   /** Secret salt for hashing client IPs (preferred name). */

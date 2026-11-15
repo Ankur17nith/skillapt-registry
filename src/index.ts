@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context, Next } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { PRODUCT_NAME, REGISTRY_VERSION } from "./config";
@@ -113,6 +114,31 @@ app.use(
     keyGenerator: (c) => `general:${getClientIp(c)}`
   })
 );
+
+// Read-only maintenance mode: reads, health checks and logout keep working.
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const MAINTENANCE_ALLOWED_POSTS = new Set(["/v1/auth/logout", "/dashboard/logout"]);
+const maintenanceGuard = async (c: Context<{ Bindings: Env }>, next: Next) => {
+  if (
+    c.env?.MAINTENANCE_MODE === "true" &&
+    !SAFE_METHODS.has(c.req.method) &&
+    !MAINTENANCE_ALLOWED_POSTS.has(c.req.path)
+  ) {
+    c.header("Retry-After", "600");
+    return c.json(
+      {
+        error: {
+          code: "MAINTENANCE",
+          message: "Registry is in scheduled read-only maintenance mode."
+        }
+      },
+      503
+    );
+  }
+  return next();
+};
+app.use("/v1/*", maintenanceGuard);
+app.use("/dashboard/*", maintenanceGuard);
 
 // Cap request bodies on everything except the package upload (which streams
 // through its own 5 MB limit): JSON endpoints never need more than a few KB.
