@@ -1,240 +1,218 @@
-# Production Deployment Guide for Skillapt Registry
+# Deploying skillapt-registry on Cloudflare's free tier
 
-This document contains step-by-step instructions for the maintainer to deploy `skillapt-registry` to production on Cloudflare Workers.
+This guide takes you from a fresh clone to a running registry on a free
+`*.workers.dev` address. **No domain name and no paid plan are required.**
 
 > [!IMPORTANT]
-> In accordance with safety rules, automated AI agents never execute commands with `--remote` or `wrangler deploy`. All commands in this guide must be executed manually by an authorized human operator with Cloudflare administrator credentials.
+> Every command below is run **by you**, a human operator, with your own Cloudflare
+> account. Automated agents in this repository never run `wrangler login`,
+> `wrangler deploy` or any `--remote` command.
+
+---
+
+## 0. What you get, and the free-tier limits
+
+| Component | Cloudflare service | Free-tier allowance (check Cloudflare's pricing page, limits change) |
+| :--- | :--- | :--- |
+| API | Workers | 100,000 requests/day, **10 ms CPU per request** |
+| Metadata | D1 (SQLite) | 5 GB storage, 5 million rows read/day, 100,000 rows written/day |
+| Package tarballs | R2 | 10 GB storage, 1M writes and 10M reads per month, no egress fees |
+| Rate limiting | Durable Objects (SQLite-backed) | 100,000 requests/day |
+| Cleanup job | Cron Triggers | included (this project uses one) |
+
+What this means in practice:
+
+- **R2 needs a payment method on file** even though the free allowance costs nothing.
+  If you will not add one, you cannot use R2; there is no free alternative wired into this project.
+- The **10 ms CPU** limit applies to the free Workers plan. Publishing validates a
+  gzip+tar archive and hashes it, which can exceed 10 ms for large packages
+  (Cloudflare returns error 1102). Small skills (a few hundred KB) are fine;
+  large publishes may need the Workers Paid plan.
+- The **Durable Object** rate limiter is called once per API request. When its
+  100,000 requests/day quota is used up, the registry **fails open** (requests are
+  served without rate limiting) instead of returning errors.
+- You get a URL like `https://skillapt-registry.<your-subdomain>.workers.dev`. Browsers
+  and the CLI use it over HTTPS; there is nothing to configure for TLS.
 
 ---
 
 ## 1. Prerequisites
 
-Before starting the deployment, verify you have:
-1. **Cloudflare Account**: Workers Paid subscription (required for Durable Objects, D1, and R2 bindings).
-2. **Domain Configuration**: The `skillapt.dev` apex domain added to your Cloudflare account and active.
-3. **Wrangler CLI**: Node.js `>=22.5` and Wrangler v4 installed (`pnpm install` in repo or `npx wrangler`).
-4. **Cloudflare Authentication**: Log in to Cloudflare using the CLI:
+1. A free Cloudflare account (https://dash.cloudflare.com/sign-up).
+2. A GitHub account (for the OAuth app that signs publishers in).
+3. Node.js **>= 22.5** and `pnpm`.
+4. This repository cloned, with dependencies installed:
+
+   ```bash
+   pnpm install --frozen-lockfile
+   ```
+
+5. Log in to Cloudflare (opens a browser):
+
    ```bash
    npx wrangler login
-   ```
-   Verify authentication:
-   ```bash
    npx wrangler whoami
    ```
 
 ---
 
-## 2. Cloudflare Resource Provisioning
+## 2. Create the Cloudflare resources
 
-### 2.1 Create Production D1 Database
-Create the production D1 SQLite database:
+### 2.1 D1 database
+
 ```bash
-npx wrangler d1 create skillapt-db-prod
-```
-The command outputs a JSON block with the newly created `database_id` (a UUID, e.g. `12345678-abcd-ef01-2345-6789abcdef01`).
-
-Update `wrangler.jsonc` under `env.production.d1_databases[0]`:
-```jsonc
-"d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "skillapt-db-prod",
-    "database_id": "<PASTE-YOUR-PRODUCTION-DATABASE-ID-HERE>"
-  }
-]
+npx wrangler d1 create skillapt-db
 ```
 
-### 2.2 Create Production R2 Object Storage Bucket
-Create the R2 bucket to store immutable skill package tarballs:
+Copy the `database_id` it prints and paste it into `wrangler.jsonc`, replacing the
+`REPLACE_WITH_YOUR_D1_DATABASE_ID` placeholder.
+
+### 2.2 R2 bucket
+
 ```bash
 npx wrangler r2 bucket create skillapt-packages
 ```
 
-### 2.3 Durable Objects Binding
-The Durable Object class `RateLimiterDO` is compiled into the Worker bundle. In `wrangler.jsonc`, `env.production.durable_objects` already configures:
-```jsonc
-"durable_objects": {
-  "bindings": [
-    {
-      "name": "RATE_LIMITER_DO",
-      "class_name": "RateLimiterDO"
-    }
-  ]
-}
-```
+(R2 must be enabled first in the dashboard under **R2 Object Storage**, which is
+where Cloudflare asks for a payment method.)
+
+### 2.3 Durable Object
+
+Nothing to create. `RateLimiterDO` ships inside the Worker and `wrangler.jsonc`
+declares it with `new_sqlite_classes`, the only Durable Object kind the free plan allows.
 
 ---
 
-## 3. Apply Production Database Migrations
+## 3. Apply the database migrations
 
-Apply all numbered SQL migrations (`0001` through `0005`) to the remote production D1 database:
 ```bash
-npx wrangler d1 migrations apply DB --remote --env production
+npx wrangler d1 migrations apply DB --remote
 ```
-Ensure Wrangler reports all migrations applied successfully:
-- `0001_initial.sql`
-- `0002_scopes_and_latest_version.sql`
-- `0003_takedown_and_version_status.sql`
-- `0004_auth_tokens_and_sessions.sql`
-- `0005_download_dedupe_and_report_privacy.sql`
+
+All five migrations (`0001` to `0005`) should be reported as applied.
 
 ---
 
-## 4. GitHub OAuth Application Setup
+## 4. Create a GitHub OAuth app
 
-Set up a dedicated GitHub OAuth App for production:
-1. Navigate to **GitHub Settings** -> **Developer settings** -> **OAuth Apps** -> **New OAuth App**.
+You need your Worker URL for this, and Cloudflare only shows it after the first
+deploy. The easiest order is: deploy once (step 6), note the URL, then come back.
+Your URL is `https://skillapt-registry.<your-subdomain>.workers.dev`; the
+`<your-subdomain>` is shown by `wrangler deploy` and under **Workers & Pages**.
+
+1. GitHub: **Settings > Developer settings > OAuth Apps > New OAuth App**.
 2. Fill in:
-   - **Application name**: `Skillapt Registry (Production)`
-   - **Homepage URL**: `https://skillapt.dev`
-   - **Application description**: `Package registry authentication for skillapt AI agent skills.`
-   - **Authorization callback URL**: `https://registry.skillapt.dev/v1/auth/github/callback`
-3. Click **Register application**.
-4. Note the **Client ID**.
-5. Generate a **Client Secret** and copy it securely.
+   - **Application name**: `Skillapt Registry`
+   - **Homepage URL**: your Worker URL (or your Pages site URL)
+   - **Authorization callback URL**: `<your Worker URL>/v1/auth/github/callback`
+3. Register it, copy the **Client ID**, and generate a **Client Secret**.
 
 ---
 
-## 5. Configure Production Secrets
+## 5. Configure variables and secrets
 
-Inject secrets into Cloudflare Worker production environment using Wrangler.
-Never commit secrets or paste them into tracked repository files.
+### 5.1 Plain variables (in `wrangler.jsonc`, section `vars`)
+
+| Variable | Value |
+| :--- | :--- |
+| `ENVIRONMENT` | Keep `production`. Any value other than `development`/`test` is treated as production. |
+| `PUBLIC_ORIGIN` | Your Worker URL, e.g. `https://skillapt-registry.<your-subdomain>.workers.dev` |
+| `CORS_ORIGIN` | Exact, comma-separated origins allowed to call the API from a browser, e.g. your Cloudflare Pages site `https://skillapt-web.pages.dev`. `*` and localhost are rejected in production. Leave empty to allow none. |
+
+### 5.2 Secrets (never committed)
 
 ```bash
-# 1. GitHub OAuth Client ID
-npx wrangler secret put GITHUB_CLIENT_ID --env production
-
-# 2. GitHub OAuth Client Secret
-npx wrangler secret put GITHUB_CLIENT_SECRET --env production
-
-# 3. Pepper/Salt for IP hashing in abuse reports and download deduplication
-# Generate a cryptographically random 64-character hex string:
-# openssl rand -hex 32
-npx wrangler secret put HASH_SALT --env production
+npx wrangler secret put GITHUB_CLIENT_ID
+npx wrangler secret put GITHUB_CLIENT_SECRET
+# A long random value used to salt hashed client IPs:
+openssl rand -hex 32            # copy the output, then:
+npx wrangler secret put HASH_SALT
 ```
 
-> [!NOTE]
-> `HASH_SALT` must be a high-entropy secret (e.g. 32 bytes / 64 hex characters) used for one-way salted hashing of client IP addresses (`SHA-256(IP + salt)`).
+`HASH_SALT` protects the stored IP hashes (download de-duplication and abuse
+reports). If you skip it the Worker derives a salt from `GITHUB_CLIENT_SECRET`,
+so set it anyway.
 
 ---
 
-## 6. Verify Production Build & Dry-Run
+## 6. Verify, then deploy
 
-Verify the package builds cleanly with no type errors or bundle issues:
 ```bash
-pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm audit --prod
-npx wrangler deploy --dry-run --env production
+npx wrangler deploy --dry-run     # builds the bundle, uploads nothing
+npx wrangler deploy               # publishes to <name>.workers.dev
 ```
+
+`wrangler deploy` prints your live URL. Put it into `PUBLIC_ORIGIN` (step 5.1),
+use it for the OAuth callback (step 4), and deploy once more if you changed vars.
+
+> The repository also contains a manual GitHub Actions workflow
+> (`.github/workflows/deploy.yml`). It needs the secrets `CLOUDFLARE_API_TOKEN`
+> and `CLOUDFLARE_ACCOUNT_ID`; without them it only reports that deployment was skipped.
 
 ---
 
-## 7. Deploy Worker to Production
+## 7. Create the first administrator
 
-Deploy the Worker to Cloudflare:
-```bash
-npx wrangler deploy --env production
-```
+1. Visit `<your Worker URL>/dashboard` and sign in with GitHub. This creates your user row.
+2. Promote yourself (admins can take packages down):
 
----
-
-## 8. Custom Domain & DNS Attachment
-
-`wrangler.jsonc` has configured:
-```jsonc
-"routes": [
-  {
-    "pattern": "registry.skillapt.dev",
-    "custom_domain": true
-  }
-]
-```
-If not automatically attached by Cloudflare:
-1. Open the Cloudflare Dashboard -> **Workers & Pages** -> select `skillapt-registry`.
-2. Go to **Settings** -> **Domains & Routes** -> **Add Custom Domain**.
-3. Enter `registry.skillapt.dev` and confirm. Cloudflare will automatically provision the SSL/TLS certificate and manage DNS.
-
----
-
-## 9. Bootstrap the First Administrator
-
-To manage abuse reports and perform package takedowns, bootstrap the primary administrator account:
-1. Open a browser and visit `https://registry.skillapt.dev/v1/auth/github`.
-2. Log in with your GitHub account. Upon authorization, you will be redirected to `https://registry.skillapt.dev/dashboard`.
-   (This creates your user record in production D1).
-3. Promote your account to the admin role via Wrangler CLI:
    ```bash
-   npx wrangler d1 execute DB --remote --env production --command "UPDATE users SET role = 'admin' WHERE handle = '<your-github-username>';"
-   ```
-4. Verify your admin status:
-   ```bash
-   npx wrangler d1 execute DB --remote --env production --command "SELECT id, handle, role FROM users WHERE handle = '<your-github-username>';"
+   npx wrangler d1 execute DB --remote --command \
+     "UPDATE users SET role = 'admin' WHERE handle = '<your-github-handle>';"
+   npx wrangler d1 execute DB --remote --command \
+     "SELECT id, handle, role FROM users WHERE handle = '<your-github-handle>';"
    ```
 
----
-
-## 10. Run Post-Deployment Verification
-
-On your workstation, create an API token from `/dashboard` or pass an admin token to `scripts/post-deploy-check.sh`:
-```bash
-REGISTRY_URL="https://registry.skillapt.dev" \
-REGISTRY_TOKEN="<your-admin-token>" \
-bash scripts/post-deploy-check.sh
-```
-Verify all checks pass (health check, anonymous search, test package publishing, download integrity check).
+3. In the dashboard, generate a personal access token (`apt_live_...`). It is shown **once**.
 
 ---
 
-## 11. Staging Environment Provisioning & Deployment
+## 8. Post-deployment verification
 
-The staging environment (`env.staging`) provides a safe pre-production environment with completely isolated D1 database, R2 bucket, and Durable Object bindings.
-
-### 11.1 Provision Staging Cloudflare Resources
 ```bash
-# 1. Create Staging D1 Database
-npx wrangler d1 create skillapt-db-staging
-
-# 2. Create Staging R2 Bucket
-npx wrangler r2 bucket create skillapt-packages-staging
-```
-
-Update `wrangler.jsonc` under `env.staging.d1_databases[0]`:
-```jsonc
-"d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "skillapt-db-staging",
-    "database_id": "<PASTE-YOUR-STAGING-DATABASE-ID-HERE>",
-    "migrations_dir": "migrations"
-  }
-]
-```
-
-### 11.2 Apply Migrations to Staging
-```bash
-npx wrangler d1 migrations apply DB --remote --env staging
-```
-
-### 11.3 Configure Staging Secrets
-```bash
-# GitHub OAuth app for staging (callback: https://staging-registry.skillapt.dev/v1/auth/github/callback)
-npx wrangler secret put GITHUB_CLIENT_ID --env staging
-npx wrangler secret put GITHUB_CLIENT_SECRET --env staging
-
-# Salt for IP hashing
-npx wrangler secret put HASH_SALT --env staging
-```
-
-### 11.4 Deploy to Staging
-```bash
-npx wrangler deploy --env staging
-```
-
-### 11.5 Verify Staging Deployment
-```bash
-REGISTRY_URL="https://staging-registry.skillapt.dev" \
-REGISTRY_TOKEN="<your-staging-token>" \
+REGISTRY_URL="https://skillapt-registry.<your-subdomain>.workers.dev" \
+REGISTRY_TOKEN="apt_live_..." \
 bash scripts/post-deploy-check.sh
 ```
+
+The script checks `/v1/health`, anonymous search, an authenticated publish of a
+tiny test package, and the SHA-256 of the downloaded tarball. Without
+`REGISTRY_TOKEN` it only runs the read-only checks.
+
+Point the CLI at your registry:
+
+```bash
+export SKILLAPT_REGISTRY="https://skillapt-registry.<your-subdomain>.workers.dev"
+skillapt search pdf
+```
+
+---
+
+## 9. Hosting the web frontend (optional)
+
+The `skillapt-web` site deploys to Cloudflare Pages for free (see its README).
+After you know its URL (for example `https://skillapt-web.pages.dev`), add that
+exact origin to `CORS_ORIGIN` here and run `npx wrangler deploy` again.
+
+---
+
+## 10. Adding a custom domain later (optional)
+
+If you later buy a domain and add it to Cloudflare, uncomment the `routes`
+example at the bottom of `wrangler.jsonc`, set `PUBLIC_ORIGIN` / `CORS_ORIGIN`
+to the new origins, update the GitHub OAuth callback URL, and redeploy.
+
+---
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause |
+| :--- | :--- |
+| `wrangler deploy` complains about the D1 id | `REPLACE_WITH_YOUR_D1_DATABASE_ID` is still in `wrangler.jsonc`. |
+| Login redirects to GitHub with "redirect_uri mismatch" | The OAuth callback URL does not equal `<Worker URL>/v1/auth/github/callback`. |
+| Browser calls fail with a CORS error | The page's exact origin is missing from `CORS_ORIGIN`. |
+| Publish fails with error 1102 | Free-plan CPU limit exceeded; publish a smaller package. |
+| `/dashboard` sign-in loops | `ENVIRONMENT` is `development` on a deployed Worker, or cookies are blocked. Cookies are `Secure`, so use HTTPS. |
