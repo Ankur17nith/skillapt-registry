@@ -5,6 +5,25 @@ All notable changes to the Skillapt Registry will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Tar validation bypass (high)**: PAX `size` records are now honored when walking archive entries and must be strict decimal integers; previously a `size=0` decoy could hide a symlink or traversal entry from validation while real extractors still saw it. Truncated entries are rejected.
+- **Bounded multipart uploads**: the raw request body is read through the 5 MB capped reader before `multipart/form-data` parsing, so chunked uploads cannot exhaust Worker memory.
+- **Dashboard token handling**: newly created tokens and error messages are delivered via one-shot HttpOnly flash cookies instead of the URL (history/log leakage, forged banners); dashboard token creation now shares the 10-per-day limit; CSRF and OAuth state comparisons are constant-time.
+- **Fail-safe environment**: only `ENVIRONMENT=development|test` relaxes protections; a missing value no longer leaks error messages or allows localhost/unowned origins. Production allows exactly `CORS_ORIGIN` plus `PUBLIC_ORIGIN`.
+- **Privacy**: the documented `HASH_SALT` secret is now actually used (the code only read `REPORT_SALT`); without any secret, IP hashing no longer uses a public constant.
+- **Resilience**: a failing or quota-exhausted rate-limiter Durable Object fails open instead of returning 500s; expired limiter rows are purged.
+- Added HSTS, CSP and `X-Frame-Options` on API responses and a 64 KB cap on JSON request bodies; escaped LIKE wildcards in the `compat` filter.
+
+### Added
+- `MAINTENANCE_MODE=true` read-only switch (documented in the runbook but previously unimplemented).
+- `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue/PR templates, CodeQL workflow.
+
+### Changed
+- Deployment targets Cloudflare's free tier on `*.workers.dev` with no custom domain; `wrangler.jsonc` has a single environment with `PUBLIC_ORIGIN` / `CORS_ORIGIN` vars and `compatibility_date` 2026-10-01. `docs/DEPLOY.md` rewritten accordingly.
+- CI: fixed the conformance job setup, the never-true deploy token check, and added least-privilege permissions, concurrency and timeouts.
+
 ## [1.2.0] - 2026-11-15
 
 ### Added
