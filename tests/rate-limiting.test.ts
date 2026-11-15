@@ -257,3 +257,80 @@ describe("Branch 7: Rate Limiting & Durable Object Architecture", () => {
     });
   });
 });
+
+describe("Rate limiter resilience and storage hygiene", () => {
+  const dummyEnv = {} as Env;
+
+  it("fails open when the Durable Object stub throws", async () => {
+    const namespace: any = {
+      idFromName: () => ({}),
+      get: () => ({
+        fetch: async () => {
+          throw new Error("Durable Object daily request limit exceeded");
+        }
+      })
+    };
+    const limiter = new DurableObjectRateLimiter(namespace);
+    const result = await limiter.check("k", 60_000, 5);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("fails open when the Durable Object responds with an error status", async () => {
+    const namespace: any = {
+      idFromName: () => ({}),
+      get: () => ({ fetch: async () => new Response("boom", { status: 500 }) })
+    };
+    const limiter = new DurableObjectRateLimiter(namespace);
+    expect((await limiter.check("k", 60_000, 5)).allowed).toBe(true);
+  });
+
+  it("keeps serving API requests when the rate limiter is down", async () => {
+    const db = new MockD1Database();
+    db.applyMigrations();
+    db.applySeed();
+    const brokenNamespace: any = {
+      idFromName: () => ({}),
+      get: () => ({
+        fetch: async () => {
+          throw new Error("unavailable");
+        }
+      })
+    };
+    const res = await app.request(
+      "/v1/stats",
+      {},
+      {
+        DB: db.asD1(),
+        STORAGE: new MockR2Bucket().asR2(),
+        ENVIRONMENT: "test",
+        RATE_LIMITER_DO: brokenNamespace
+      } as Env
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("purges expired rate-limit rows from Durable Object SQL storage", async () => {
+    const statements: { sql: string; args: unknown[] }[] = [];
+    const mockState: any = {
+      storage: {
+        sql: {
+          exec: (sql: string, ...args: unknown[]) => {
+            statements.push({ sql, args });
+            return { toArray: () => [] };
+          }
+        }
+      }
+    };
+    const doInstance = new RateLimiterDO(mockState, dummyEnv);
+    const before = Date.now();
+    await doInstance.fetch(
+      new Request("http://rate-limiter/limit", {
+        method: "POST",
+        body: JSON.stringify({ key: "k", windowMs: 1000, maxRequests: 5 })
+      })
+    );
+    const purge = statements.find((s) => /DELETE FROM rate_limits WHERE reset_at < \?/.test(s.sql));
+    expect(purge).toBeDefined();
+    expect(purge!.args[0] as number).toBeGreaterThanOrEqual(before);
+  });
+});

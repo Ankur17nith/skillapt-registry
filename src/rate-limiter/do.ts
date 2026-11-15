@@ -53,30 +53,45 @@ export class DurableObjectRateLimiter implements RateLimiter {
   }
 
   async check(key: string, windowMs: number, maxRequests: number): Promise<RateLimitResult> {
-    const id = this.namespace.idFromName("rate-limiter");
-    const stub = this.namespace.get(id);
+    // Rate limiting is a protective layer, not a dependency of correctness: if the
+    // Durable Object is unavailable (outage, or the free-plan daily request quota
+    // is exhausted) fail OPEN instead of turning every API request into a 500.
+    const failOpen: RateLimitResult = {
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + windowMs,
+      retryAfterSeconds: 1
+    };
 
-    const res = await stub.fetch("http://rate-limiter/limit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key, windowMs, maxRequests })
-    });
+    try {
+      const id = this.namespace.idFromName("rate-limiter");
+      const stub = this.namespace.get(id);
 
-    if (!res.ok) {
-      return {
-        allowed: true,
-        count: 1,
-        resetAt: Date.now() + windowMs,
-        retryAfterSeconds: 1
-      };
+      const res = await stub.fetch("http://rate-limiter/limit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, windowMs, maxRequests })
+      });
+
+      if (!res.ok) {
+        return failOpen;
+      }
+
+      return (await res.json()) as RateLimitResult;
+    } catch (err) {
+      console.warn("Rate limiter unavailable; failing open:", err instanceof Error ? err.message : err);
+      return failOpen;
     }
-
-    return (await res.json()) as RateLimitResult;
   }
 }
 
+// Expired rows are only ever replaced when the same key is seen again, so purge
+// them periodically to keep Durable Object storage bounded.
+const PURGE_INTERVAL_MS = 60 * 1000;
+
 export class RateLimiterDO {
   private state: DurableObjectState;
+  private lastPurgeAt = 0;
 
   constructor(state: DurableObjectState, _env: Env) {
     this.state = state;
@@ -107,6 +122,11 @@ export class RateLimiterDO {
       let resetAt = now + windowMs;
 
       try {
+        if (now - this.lastPurgeAt >= PURGE_INTERVAL_MS) {
+          this.lastPurgeAt = now;
+          this.state.storage.sql.exec("DELETE FROM rate_limits WHERE reset_at < ?", now);
+        }
+
         const rows = this.state.storage.sql.exec(
           "SELECT count, reset_at FROM rate_limits WHERE key = ?",
           key
