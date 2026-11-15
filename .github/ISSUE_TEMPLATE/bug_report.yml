@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in the registry does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security problems must not be filed here.** See SECURITY.md.
+        Never paste tokens or secrets.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Requests (`curl` with the token removed), commands or a failing test.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Registry version
+      description: From `GET /v1/health`, for example 1.2.0.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      render: shell
