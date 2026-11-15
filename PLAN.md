@@ -470,6 +470,7 @@ $ git branch -r --merged origin/main
   origin/docs/ci-spec-sync
   origin/docs/github-pages
   origin/docs/plan-reconcile
+  origin/docs/runbook-fixes
   origin/docs/spec-v1.1
   origin/feat/auth-sessions-tokens
   origin/feat/chore-project-setup
@@ -480,15 +481,19 @@ $ git branch -r --merged origin/main
   origin/feat/publish-endpoint
   origin/feat/read-api
   origin/feat/real-seed
+  origin/feat/remote-conformance
+  origin/feat/staging-env
   origin/feat/takedown-and-version-status
   origin/feat/tarball-storage-and-download
   origin/feat/token-dashboard
   origin/feat/yank-reports-ratelimits-stats
   origin/fix/auth-sessions-csrf-cors
+  origin/fix/deploy-workflow-gating
   origin/fix/publish-atomicity-and-limits
   origin/fix/publish-validation
   origin/fix/rate-limiting
   origin/fix/search-download-reports
+  origin/fix/skillmd-name-strict
   origin/fix/worker-startup-and-config
   origin/main
   origin/test/cli-contract-conformance
@@ -501,6 +506,7 @@ a039d08ab4b36f9ed396c6c1a812474bb5e8840f	refs/heads/dependabot/npm_and_yarn/zod-
 cc8ebe00e6c2e080a6bed7315aa375b89a856d44	refs/heads/docs/ci-spec-sync
 e411bfa10ab8ac1da9c0ec9009cc09dd125d9dee	refs/heads/docs/github-pages
 fc302a57a19fd70c9b813934e7779ddd853e80b7	refs/heads/docs/plan-reconcile
+4fbbcf82e8fca1554f8b400f57314b3b532586c0	refs/heads/docs/runbook-fixes
 b2edd542523737edfaa2bfdb1d38577095891382	refs/heads/docs/spec-v1.1
 4d41654be1d811974db76c913bde904432d97c62	refs/heads/feat/auth-sessions-tokens
 fe7905bcd139b24a1c277b43ba4f3486208aff27	refs/heads/feat/chore-project-setup
@@ -511,17 +517,21 @@ b906dd670db6244a8edb2c4844f8d988edc44349	refs/heads/feat/package-validation
 0ef964acef83e71cc619449fd48b02e6ffdbfe25	refs/heads/feat/publish-endpoint
 422b06aa86a51018358a5c20f85b250b3185ef01	refs/heads/feat/read-api
 b2edd542523737edfaa2bfdb1d38577095891382	refs/heads/feat/real-seed
+3246a1d74723b4b614e744c5831fbfa014002321	refs/heads/feat/remote-conformance
+abac3460399d0a9024a65980cb3746574078c621	refs/heads/feat/staging-env
 e2506ea2bbe2a73a085cc22f22da92108a3e8693	refs/heads/feat/takedown-and-version-status
 2acb034134aa5afc240ab6c9417842e1348f93b2	refs/heads/feat/tarball-storage-and-download
 215463d641be789d2e967407ce1bfc5d6d39cbca	refs/heads/feat/token-dashboard
 b6328ebdd3ba61f26eff7c97ecbc53395b3d41ff	refs/heads/feat/yank-reports-ratelimits-stats
 aeae87fc7449c802f61a209c79ba2c68edcd37b8	refs/heads/fix/auth-sessions-csrf-cors
+22d5f155c196004cb0c37db070cd1dc7b9143a41	refs/heads/fix/deploy-workflow-gating
 ce87342a55b28b3fc7afa428735b61ffb918d437	refs/heads/fix/publish-atomicity-and-limits
 2192be4905ff0489cbb11f47d76cc6cc9aa92eae	refs/heads/fix/publish-validation
 faf99190d521ca934787a46c2e48d8b5cfe9b28d	refs/heads/fix/rate-limiting
 e604186df9da61649730322e4752894fb48f65f2	refs/heads/fix/search-download-reports
+273de6dae9dc42a3c6177d8e78203546c78f5553	refs/heads/fix/skillmd-name-strict
 1927008800eb39891f538df1599b49fe7bae21e6	refs/heads/fix/worker-startup-and-config
-10268a8f2f77675437b8cb313fb8cf3d6f46278c	refs/heads/main
+7070d758770a9e21e09bbd4fc0254c46f60c7c57	refs/heads/main
 13d6104473bdf05d9f7d1581ae428945a641e603	refs/heads/test/cli-contract-conformance
 ```
 
