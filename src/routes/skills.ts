@@ -9,7 +9,7 @@ import { requireAuth } from "../middleware/auth";
 import { rateLimit, getClientIp } from "../middleware/rate-limit";
 import { LIMITS } from "../config";
 import { ALLOWED_CATEGORIES } from "../validation/manifest";
-import { formatSearchText } from "../utils/text";
+import { formatSearchText, formatSkillMarkdown } from "../utils/text";
 
 export const skillsRouter = new Hono<{ Bindings: Env }>();
 
@@ -871,6 +871,30 @@ skillsRouter.get("/:name", async (c) => {
     compatibility = [];
   }
 
+  const accept = c.req.header("Accept") || "";
+  if (c.req.query("format") === "md" || c.req.query("format") === "text" || accept.includes("text/markdown")) {
+    c.header("Vary", "Accept");
+    return c.text(
+      formatSkillMarkdown({
+        name: skill.name,
+        description: skill.description,
+        category: skill.category,
+        license: skill.license,
+        keywords,
+        compatibility,
+        latestVersion,
+        downloads: skill.downloads,
+        verified: Boolean(skill.verified),
+        source: skill.source || "published",
+        claimStatus: skill.claim_status || "owned",
+        sourceUrl: skill.source_url || skill.repository || null,
+        ownerHandle: skill.owner_handle || "unknown"
+      }),
+      200,
+      { "Content-Type": "text/markdown; charset=utf-8" }
+    );
+  }
+
   return c.json({
     name: skill.name,
     description: skill.description,
@@ -879,6 +903,10 @@ skillsRouter.get("/:name", async (c) => {
     keywords,
     category: skill.category,
     compatibility,
+    source: skill.source || "published",
+    claimStatus: skill.claim_status || "owned",
+    sourceUrl: skill.source_url || null,
+    installCommand: `npx skillapt install ${skill.name}`,
     owner: {
       handle: skill.owner_handle || "unknown",
       avatarUrl: skill.owner_avatar || ""

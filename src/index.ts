@@ -96,6 +96,7 @@ app.get("/v1/health", (c) => {
   });
 });
 
+import { formatLlmsTxt } from "./utils/text";
 import { skillsRouter } from "./routes/skills";
 import { authRouter } from "./routes/auth";
 import { tokensRouter, meRouter } from "./routes/tokens";
@@ -105,6 +106,15 @@ import { adminRouter } from "./routes/admin";
 import { dashboardRouter } from "./routes/dashboard";
 import { categoriesRouter } from "./routes/categories";
 import { rateLimit, getClientIp } from "./middleware/rate-limit";
+
+// Agent-facing guide, served at the root and under /v1.
+const llmsHandler = (c: Context<{ Bindings: Env }>) => {
+  const origin = c.env?.PUBLIC_ORIGIN || new URL(c.req.url).origin;
+  c.header("Cache-Control", "public, max-age=3600");
+  return c.text(formatLlmsTxt(origin.replace(/\/$/, "")));
+};
+app.get("/llms.txt", llmsHandler);
+app.get("/v1/llms.txt", llmsHandler);
 
 // General API Rate Limit: 300 requests / minute per IP or Token
 app.use(
