@@ -66,6 +66,12 @@ Everything lives under `/v1` (plus the server-rendered token dashboard at `/dash
 | `GET` | `/v1/auth/github` (+ `/callback`) | GitHub OAuth login | Public |
 | `POST` | `/v1/auth/logout` | End the session | Session |
 | `GET` | `/v1/stats` | Registry totals | Public |
+| `GET` | `/v1/categories` | Categories (what skills are for) with counts | Public |
+| `POST` | `/v1/skills/:name/claim` | Claim a crawled, unclaimed listing (repo owner only) | Token / session |
+| `POST` | `/v1/admin/ingest` | Batch-index crawled skills (metadata + source link) | Admin |
+| `GET` | `/llms.txt` | Plain-text guide for LLMs and agents | Public |
+
+**For agents:** add `?format=text` to `/v1/skills` and `/v1/categories` for plain text, and `?format=md` (or `Accept: text/markdown`) to `/v1/skills/:name`. Search is ranked full text over name, description and keywords. See [`docs/DISCOVERY-PLAN.md`](docs/DISCOVERY-PLAN.md) for the ownership and crawler design (including free-tier write limits: expect on the order of 10,000 new listings per day on D1's free plan).
 
 Scoped names are URL-encoded in paths (`@alice/tool` becomes `%40alice%2Ftool`). Full request and response schemas: [`docs/openapi.yaml`](docs/openapi.yaml) and [`docs/SPEC.md`](docs/SPEC.md).
 

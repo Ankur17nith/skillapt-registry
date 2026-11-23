@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Skill discovery for people and agents: 20-category taxonomy with `GET /v1/categories`, FTS5 ranked search (natural-language queries), `format=text` search output, `?format=md` skill pages, and `/llms.txt`.
+- Ownership model: every skill has `source` (`published` | `crawled`) and `claimStatus` (`owned` | `unclaimed` | `claimed`). The repository's GitHub owner can claim a crawled listing with `POST /v1/skills/:name/claim`, or take it over by publishing under their scope.
+- `POST /v1/admin/ingest` (admin only) and `scripts/crawl-github.mjs` plus a daily workflow to index public `SKILL.md` files as metadata and a source link (dry run unless configured). Migration `0006`.
+
 ### Security
 - **Tar validation bypass (high)**: PAX `size` records are now honored when walking archive entries and must be strict decimal integers; previously a `size=0` decoy could hide a symlink or traversal entry from validation while real extractors still saw it. Truncated entries are rejected.
 - **Bounded multipart uploads**: the raw request body is read through the 5 MB capped reader before `multipart/form-data` parsing, so chunked uploads cannot exhaust Worker memory.
