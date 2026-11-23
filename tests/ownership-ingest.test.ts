@@ -85,6 +85,15 @@ describe("Crawled skills: ingest, ownership and claims", () => {
     expect(JSON.parse(row.keywords)).toEqual(["pdf", "tables"]);
     expect(JSON.parse(row.compatibility)).toEqual(["claude"]);
 
+    const detail = (await (await app.request("/v1/skills/%40alexdev%2Fpdf-tools", {}, env)).json()) as any;
+    expect(detail).toMatchObject({
+      source: "crawled",
+      claimStatus: "unclaimed",
+      sourceUrl: "https://github.com/alexdev/skills",
+      sourcePath: "pdf-tools",
+      sourceSha: "abc1234"
+    });
+
     const search = await (await app.request("/v1/skills?q=pdf%20tables", {}, env)).json() as any;
     const hit = search.skills.find((s: any) => s.name === "@alexdev/pdf-tools");
     expect(hit.claimStatus).toBe("unclaimed");

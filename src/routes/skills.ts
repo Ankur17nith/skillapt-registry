@@ -53,6 +53,8 @@ interface SkillDbRow {
   source?: string;
   claim_status?: string;
   source_url?: string | null;
+  source_path?: string | null;
+  source_sha?: string | null;
 }
 
 interface VersionDbRow {
@@ -928,6 +930,8 @@ skillsRouter.get("/:name", async (c) => {
     source: skill.source || "published",
     claimStatus: skill.claim_status || "owned",
     sourceUrl: skill.source_url || null,
+    sourcePath: skill.source_path || null,
+    sourceSha: skill.source_sha || null,
     installCommand: `npx skillapt install ${skill.name}`,
     owner: {
       handle: skill.owner_handle || "unknown",
