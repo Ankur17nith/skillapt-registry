@@ -1,22 +1,14 @@
 import { z } from "zod";
 import semver from "semver";
 import { LIMITS, RESERVED_NAMES } from "../config";
+import { CATEGORY_IDS } from "../taxonomy";
 
 // Regex for valid package name:
 // Optional @scope/ where scope is 2-30 chars [a-z0-9-]
 // Name is 3-50 chars [a-z0-9-], cannot start or end with hyphen
 export const PACKAGE_NAME_REGEX = /^(@[a-z0-9-]{2,30}\/)?[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/;
 
-export const CategoryEnum = z.enum([
-  "documents",
-  "coding",
-  "research",
-  "data",
-  "devtools",
-  "communication",
-  "productivity",
-  "other"
-]);
+export const CategoryEnum = z.enum(CATEGORY_IDS);
 
 export const ALLOWED_CATEGORIES: Set<string> = new Set<string>(CategoryEnum.options);
 

@@ -34,7 +34,7 @@ export interface SkillManifest {
   license: string;
   repository?: string;
   keywords?: string[];
-  category: "documents" | "coding" | "research" | "data" | "devtools" | "communication" | "productivity" | "other";
+  category: string;
   compatibility: string[];
   dependencies?: Record<string, string>;
   permissions: PackagePermissions;

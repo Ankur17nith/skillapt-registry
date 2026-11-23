@@ -103,6 +103,7 @@ import { reportsRouter } from "./routes/reports";
 import { statsRouter } from "./routes/stats";
 import { adminRouter } from "./routes/admin";
 import { dashboardRouter } from "./routes/dashboard";
+import { categoriesRouter } from "./routes/categories";
 import { rateLimit, getClientIp } from "./middleware/rate-limit";
 
 // General API Rate Limit: 300 requests / minute per IP or Token
@@ -163,6 +164,7 @@ app.route("/v1/tokens", tokensRouter);
 app.route("/v1/me", meRouter);
 app.route("/v1/reports", reportsRouter);
 app.route("/v1/stats", statsRouter);
+app.route("/v1/categories", categoriesRouter);
 app.route("/v1/admin", adminRouter);
 app.route("/dashboard", dashboardRouter);
 
