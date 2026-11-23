@@ -105,6 +105,7 @@ import { statsRouter } from "./routes/stats";
 import { adminRouter } from "./routes/admin";
 import { dashboardRouter } from "./routes/dashboard";
 import { categoriesRouter } from "./routes/categories";
+import { claimsRouter } from "./routes/claims";
 import { rateLimit, getClientIp } from "./middleware/rate-limit";
 
 // Agent-facing guide, served at the root and under /v1.
@@ -168,6 +169,7 @@ app.use("/v1/*", async (c, next) => {
 app.use("/dashboard/*", jsonBodyLimit);
 
 // Mount API routes
+app.route("/v1/skills", claimsRouter);
 app.route("/v1/skills", skillsRouter);
 app.route("/v1/auth", authRouter);
 app.route("/v1/tokens", tokensRouter);

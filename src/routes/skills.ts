@@ -485,12 +485,22 @@ skillsRouter.post(
     }
   }
 
-  // 2. Check package ownership (unscoped packages are first-come)
+  // 2. Check package ownership (unscoped packages are first-come).
+  // A crawled, unclaimed listing can be taken over by the scope owner by
+  // publishing to it (the scope check above proves they own the namespace).
   const existingSkill = await c.env.DB.prepare(
-    "SELECT owner_id FROM skills WHERE name = ?"
-  ).bind(manifest.name).first<{ owner_id: string }>();
+    "SELECT owner_id, source, claim_status FROM skills WHERE name = ?"
+  ).bind(manifest.name).first<{ owner_id: string; source: string | null; claim_status: string | null }>();
 
-  if (existingSkill) {
+  const isUnclaimedTakeover = Boolean(
+    existingSkill &&
+      existingSkill.owner_id !== user.userId &&
+      existingSkill.source === "crawled" &&
+      existingSkill.claim_status === "unclaimed" &&
+      manifest.name.startsWith("@")
+  );
+
+  if (existingSkill && !isUnclaimedTakeover) {
     if (existingSkill.owner_id !== user.userId) {
       return c.json(
         {
@@ -701,6 +711,18 @@ skillsRouter.post(
         SET updated_at = ?
         WHERE name = ?
       `).bind(now, manifest.name)
+    );
+  }
+
+  if (isUnclaimedTakeover) {
+    statements.push(
+      c.env.DB.prepare(
+        "UPDATE skills SET owner_id = ?, source = 'published', claim_status = 'claimed' WHERE name = ?"
+      ).bind(user.userId, manifest.name),
+      c.env.DB.prepare(`
+        INSERT INTO skill_claims (id, skill_name, user_id, method, status, detail, created_at)
+        VALUES (?, ?, ?, 'publish', 'approved', ?, ?)
+      `).bind(`claim_${crypto.randomUUID()}`, manifest.name, user.userId, "Scope owner published to an unclaimed listing", now)
     );
   }
 
