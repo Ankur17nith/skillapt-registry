@@ -2,6 +2,12 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { requireAdmin } from "../middleware/auth";
 import { recomputeLatestVersion } from "./skills";
+import {
+  IngestBodySchema,
+  IngestSkillSchema,
+  normalizeIngestSkill,
+  type NormalizedIngestSkill
+} from "../validation/ingest";
 
 export const adminRouter = new Hono<{ Bindings: Env }>();
 
@@ -230,4 +236,122 @@ adminRouter.post("/reports/:id/resolve", async (c) => {
     status: "resolved",
     message: `Report '${reportId}' resolved successfully.`
   });
+});
+
+// POST /v1/admin/ingest - batch upsert of crawled skills (metadata and a source link only).
+//
+// Idempotent on the source key (source_url + source_path). A crawled listing is
+// only ever refreshed while it is still unclaimed; once an owner has claimed it,
+// or when the name belongs to a published skill, the crawler leaves it alone.
+adminRouter.post("/ingest", async (c) => {
+  const user = c.get("user");
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return c.json({ error: { code: "BAD_REQUEST", message: "Body must be JSON." } }, 400);
+  }
+
+  const parsed = IngestBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json(
+      { error: { code: "BAD_REQUEST", message: "Provide { skills: [...] } with 1-50 entries." } },
+      400
+    );
+  }
+
+  const accepted: NormalizedIngestSkill[] = [];
+  const rejected: { name: string; reason: string }[] = [];
+  for (const entry of parsed.data.skills) {
+    const result = IngestSkillSchema.safeParse(entry);
+    const label = typeof (entry as { name?: unknown })?.name === "string" ? (entry as { name: string }).name : "?";
+    if (!result.success) {
+      rejected.push({ name: label, reason: result.error.issues[0]?.message ?? "invalid" });
+    } else {
+      accepted.push(normalizeIngestSkill(result.data));
+    }
+  }
+
+  // One read to learn which names exist and who holds them.
+  const names = accepted.map((s) => s.name);
+  const existingRows = names.length
+    ? await c.env.DB.prepare(
+        `SELECT name, source, claim_status, source_url, source_path FROM skills WHERE name IN (${names.map(() => "?").join(",")})`
+      ).bind(...names).all<{
+        name: string;
+        source: string | null;
+        claim_status: string | null;
+        source_url: string | null;
+        source_path: string | null;
+      }>()
+    : { results: [] };
+  const existing = new Map((existingRows.results || []).map((r) => [r.name, r]));
+
+  const now = new Date().toISOString();
+  const statements: ReturnType<typeof c.env.DB.prepare>[] = [];
+  let created = 0;
+  let updated = 0;
+  const seen = new Set<string>();
+
+  for (const skill of accepted) {
+    if (seen.has(skill.name)) {
+      rejected.push({ name: skill.name, reason: "duplicate in batch" });
+      continue;
+    }
+    seen.add(skill.name);
+
+    const row = existing.get(skill.name);
+    if (!row) {
+      statements.push(
+        c.env.DB.prepare(`
+          INSERT INTO skills (
+            name, owner_id, description, license, repository, category, keywords, compatibility,
+            downloads, verified, readme, source, claim_status, source_url, source_path, source_sha,
+            source_owner, crawled_at, created_at, updated_at
+          ) VALUES (?, 'usr_crawler', ?, ?, ?, ?, ?, ?, 0, 0, '', 'crawled', 'unclaimed', ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          skill.name, skill.description, skill.license, skill.sourceUrl, skill.category,
+          JSON.stringify(skill.keywords), JSON.stringify(skill.compatibility),
+          skill.sourceUrl, skill.sourcePath, skill.sourceSha, skill.sourceOwner, now, now, now
+        )
+      );
+      created++;
+    } else if (
+      row.source === "crawled" &&
+      row.claim_status === "unclaimed" &&
+      row.source_url === skill.sourceUrl &&
+      (row.source_path ?? "") === skill.sourcePath
+    ) {
+      statements.push(
+        c.env.DB.prepare(`
+          UPDATE skills SET description = ?, license = ?, category = ?, keywords = ?, compatibility = ?,
+            source_sha = ?, crawled_at = ?, updated_at = ?
+          WHERE name = ? AND source = 'crawled' AND claim_status = 'unclaimed'
+        `).bind(
+          skill.description, skill.license, skill.category, JSON.stringify(skill.keywords),
+          JSON.stringify(skill.compatibility), skill.sourceSha, now, now, skill.name
+        )
+      );
+      updated++;
+    } else {
+      rejected.push({
+        name: skill.name,
+        reason: row.source === "crawled" && row.claim_status !== "unclaimed" ? "claimed by owner" : "name taken"
+      });
+    }
+  }
+
+  if (statements.length > 0) {
+    await c.env.DB.batch(statements);
+  }
+
+  await c.env.DB.prepare(`
+    INSERT INTO audit_log (id, actor_id, action, target, detail, created_at)
+    VALUES (?, ?, 'skills.ingest', 'crawler', ?, ?)
+  `).bind(
+    `audit_${crypto.randomUUID()}`, user.userId,
+    JSON.stringify({ created, updated, rejected: rejected.length }), now
+  ).run();
+
+  return c.json({ created, updated, rejected });
 });
