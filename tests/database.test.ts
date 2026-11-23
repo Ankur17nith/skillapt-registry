@@ -27,8 +27,15 @@ describe("Database Schema and Seed Migrations", () => {
     expect(skills.results[0].downloads).toBe(5230);
   });
 
+  it("creates the system crawler user and FTS index", async () => {
+    const crawler = await d1.prepare("SELECT handle FROM users WHERE id = 'usr_crawler'").first<{ handle: string }>();
+    expect(crawler?.handle).toBe("skillapt-crawler");
+    const hit = await d1.prepare("SELECT rowid FROM skills_fts WHERE skills_fts MATCH 'changelog'").all();
+    expect(hit.results.length).toBeGreaterThan(0);
+  });
+
   it("seeds realistic authors with GitHub metadata", async () => {
-    const authors = await d1.prepare("SELECT id, handle, name FROM users ORDER BY handle ASC").all<{
+    const authors = await d1.prepare("SELECT id, handle, name FROM users WHERE id != 'usr_crawler' ORDER BY handle ASC").all<{
       id: string;
       handle: string;
       name: string;
