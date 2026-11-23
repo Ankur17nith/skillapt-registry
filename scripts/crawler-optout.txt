@@ -1,0 +1,2 @@
+# GitHub owners who asked not to be indexed, one per line. Add yours with a pull request or an issue.
+# Authors can also opt a single skill out by adding `skillapt: false` to its SKILL.md frontmatter.
