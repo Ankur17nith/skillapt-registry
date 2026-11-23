@@ -97,6 +97,7 @@ describe("Crawled skills: ingest, ownership and claims", () => {
     const search = await (await app.request("/v1/skills?q=pdf%20tables", {}, env)).json() as any;
     const hit = search.skills.find((s: any) => s.name === "@alexdev/pdf-tools");
     expect(hit.claimStatus).toBe("unclaimed");
+    expect(hit.owner.handle).toBe("alexdev"); // repository owner, not the crawler user
     expect(hit.source).toBe("crawled");
   });
 

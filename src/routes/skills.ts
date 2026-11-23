@@ -23,6 +23,22 @@ function escapeLike(value: string): string {
 }
 
 /**
+ * Who to show as the author. Unclaimed (crawled) listings belong to the system
+ * crawler user, so show the repository's GitHub owner instead.
+ */
+function displayOwner(row: {
+  claim_status?: string;
+  source_owner?: string | null;
+  owner_handle?: string;
+  owner_avatar?: string;
+}): { handle: string; avatarUrl: string } {
+  if (row.claim_status === "unclaimed" && row.source_owner) {
+    return { handle: row.source_owner, avatarUrl: `https://github.com/${row.source_owner}.png` };
+  }
+  return { handle: row.owner_handle || "unknown", avatarUrl: row.owner_avatar || "" };
+}
+
+/**
  * Turn free text into a safe FTS5 query: each word becomes a quoted prefix
  * term and terms are OR-ed, so natural-language requests ("summarize a pdf")
  * still match, with bm25 ranking putting the best matches first.
@@ -55,6 +71,7 @@ interface SkillDbRow {
   source_url?: string | null;
   source_path?: string | null;
   source_sha?: string | null;
+  source_owner?: string | null;
 }
 
 interface VersionDbRow {
@@ -258,7 +275,7 @@ skillsRouter.get(
         ), '0.0.0') as latest_version,
         s.description, s.license, s.category, s.keywords, s.compatibility,
         s.downloads, s.verified, s.updated_at,
-        s.source, s.claim_status, s.source_url,
+        s.source, s.claim_status, s.source_url, s.source_owner,
         u.handle as owner_handle, u.avatar_url as owner_avatar
       FROM ${fromClause}
       LEFT JOIN users u ON s.owner_id = u.id
@@ -298,10 +315,7 @@ skillsRouter.get(
         claimStatus: row.claim_status || "owned",
         sourceUrl: row.source_url || null,
         installCommand: `npx skillapt install ${row.name}`,
-        owner: {
-          handle: row.owner_handle || "unknown",
-          avatarUrl: row.owner_avatar || ""
-        },
+        owner: displayOwner(row),
         updatedAt: row.updated_at
       };
     });
@@ -912,7 +926,7 @@ skillsRouter.get("/:name", async (c) => {
         source: skill.source || "published",
         claimStatus: skill.claim_status || "owned",
         sourceUrl: skill.source_url || skill.repository || null,
-        ownerHandle: skill.owner_handle || "unknown"
+        ownerHandle: displayOwner(skill).handle
       }),
       200,
       { "Content-Type": "text/markdown; charset=utf-8" }
@@ -933,10 +947,7 @@ skillsRouter.get("/:name", async (c) => {
     sourcePath: skill.source_path || null,
     sourceSha: skill.source_sha || null,
     installCommand: `npx skillapt install ${skill.name}`,
-    owner: {
-      handle: skill.owner_handle || "unknown",
-      avatarUrl: skill.owner_avatar || ""
-    },
+    owner: displayOwner(skill),
     latestVersion,
     downloads: skill.downloads,
     versions: versionsMap,
