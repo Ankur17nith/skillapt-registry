@@ -9,16 +9,28 @@ import { requireAuth } from "../middleware/auth";
 import { rateLimit, getClientIp } from "../middleware/rate-limit";
 import { LIMITS } from "../config";
 import { ALLOWED_CATEGORIES } from "../validation/manifest";
+import { formatSearchText } from "../utils/text";
 
 export const skillsRouter = new Hono<{ Bindings: Env }>();
 
-const ALLOWED_SORTS = new Set(["downloads", "name", "updated"]);
+const ALLOWED_SORTS = new Set(["relevance", "downloads", "name", "updated"]);
 
 // Slack for multipart boundaries and field headers around the 5 MB archive.
 const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
 
 function escapeLike(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+/**
+ * Turn free text into a safe FTS5 query: each word becomes a quoted prefix
+ * term and terms are OR-ed, so natural-language requests ("summarize a pdf")
+ * still match, with bm25 ranking putting the best matches first.
+ */
+export function buildFtsQuery(input: string): string | null {
+  const tokens = (input.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).slice(0, 12);
+  if (tokens.length === 0) return null;
+  return tokens.map((t) => `"${t}"*`).join(" OR ");
 }
 
 interface SkillDbRow {
@@ -38,6 +50,9 @@ interface SkillDbRow {
   updated_at: string;
   owner_handle?: string;
   owner_avatar?: string;
+  source?: string;
+  claim_status?: string;
+  source_url?: string | null;
 }
 
 interface VersionDbRow {
@@ -145,13 +160,14 @@ skillsRouter.get(
       q = q.slice(0, 100);
     }
 
-    const sort = c.req.query("sort") || "downloads";
+    const hasQuery = Boolean(q);
+    const sort = c.req.query("sort") || (hasQuery ? "relevance" : "downloads");
     if (!ALLOWED_SORTS.has(sort)) {
       return c.json(
         {
           error: {
             code: "BAD_REQUEST",
-            message: "Invalid sort parameter. Allowed: downloads, name, updated"
+            message: "Invalid sort parameter. Allowed: relevance, downloads, name, updated"
           }
         },
         400
@@ -180,12 +196,17 @@ skillsRouter.get(
     const conditions: string[] = [];
     const params: unknown[] = [];
 
+    let ftsQuery: string | null = null;
     if (q) {
-      const escapedQ = escapeLike(q);
-      conditions.push(
-        "(s.name LIKE ? ESCAPE '\\' OR s.description LIKE ? ESCAPE '\\' OR s.keywords LIKE ? ESCAPE '\\')"
-      );
-      params.push(`%${escapedQ}%`, `%${escapedQ}%`, `%${escapedQ}%`);
+      ftsQuery = buildFtsQuery(q);
+      if (!ftsQuery) {
+        return c.json({
+          skills: [],
+          pagination: { page, limit, total: 0, totalPages: 1 }
+        });
+      }
+      conditions.push("skills_fts MATCH ?");
+      params.push(ftsQuery);
     }
 
     if (category) {
@@ -205,17 +226,22 @@ skillsRouter.get(
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const fromClause = ftsQuery
+      ? "skills s JOIN skills_fts ON skills_fts.rowid = s.rowid"
+      : "skills s";
 
-    // Sort order
+    // Sort order (relevance only applies when there is a text query)
     let orderBy = "s.downloads DESC, s.updated_at DESC";
-    if (sort === "updated") {
+    if (sort === "relevance" && ftsQuery) {
+      orderBy = "bm25(skills_fts, 10.0, 3.0, 5.0), s.downloads DESC";
+    } else if (sort === "updated") {
       orderBy = "s.updated_at DESC";
     } else if (sort === "name") {
       orderBy = "s.name ASC";
     }
 
     // Count total matching
-    const countSql = `SELECT COUNT(*) as total FROM skills s ${whereClause}`;
+    const countSql = `SELECT COUNT(*) as total FROM ${fromClause} ${whereClause}`;
     const totalCount = (await c.env.DB.prepare(countSql).bind(...params).first<number>("total")) ?? 0;
 
     // Fetch paginated skills joined with owner (relies on latest_version to eliminate N+1)
@@ -230,8 +256,9 @@ skillsRouter.get(
         ), '0.0.0') as latest_version,
         s.description, s.license, s.category, s.keywords, s.compatibility,
         s.downloads, s.verified, s.updated_at,
+        s.source, s.claim_status, s.source_url,
         u.handle as owner_handle, u.avatar_url as owner_avatar
-      FROM skills s
+      FROM ${fromClause}
       LEFT JOIN users u ON s.owner_id = u.id
       ${whereClause}
       ORDER BY ${orderBy}
@@ -265,6 +292,10 @@ skillsRouter.get(
         compatibility,
         downloads: row.downloads,
         verified: Boolean(row.verified),
+        source: row.source || "published",
+        claimStatus: row.claim_status || "owned",
+        sourceUrl: row.source_url || null,
+        installCommand: `npx skillapt install ${row.name}`,
         owner: {
           handle: row.owner_handle || "unknown",
           avatarUrl: row.owner_avatar || ""
@@ -272,6 +303,14 @@ skillsRouter.get(
         updatedAt: row.updated_at
       };
     });
+
+    if (c.req.query("format") === "text") {
+      return c.text(
+        formatSearchText(q, category, skillSummaries, totalCount),
+        200,
+        { "Content-Type": "text/plain; charset=utf-8" }
+      );
+    }
 
     return c.json({
       skills: skillSummaries,

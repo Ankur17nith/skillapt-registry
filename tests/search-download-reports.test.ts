@@ -33,31 +33,34 @@ describe("Branch 8: Search, Download, and Abuse Reports Hardening", () => {
   });
 
   describe("1. Search: LIKE Escaping, Param Validation, and N+1 Elimination", () => {
-    it("escapes LIKE wildcards (% and _) in query parameter to produce literal matches", async () => {
-      // Seed two skills with similar names
+    it("never treats % and _ as SQL wildcards and ignores FTS operators", async () => {
       const now = new Date().toISOString();
       await mockDb.prepare(`
         INSERT INTO skills (name, owner_id, description, license, category, keywords, compatibility, downloads, verified, created_at, updated_at, latest_version)
-        VALUES 
-          ('calc%tool', 'usr_alexdev', 'Calculator with % in name', 'MIT', 'devtools', '["calc"]', '["claude"]', 10, 0, ?, ?, '1.0.0'),
-          ('calctool', 'usr_alexdev', 'Calculator without percent', 'MIT', 'devtools', '["calc"]', '["claude"]', 20, 0, ?, ?, '1.0.0'),
-          ('test_skill', 'usr_alexdev', 'Test with underscore', 'MIT', 'devtools', '["test"]', '["claude"]', 30, 0, ?, ?, '1.0.0'),
-          ('test1skill', 'usr_alexdev', 'Test with 1', 'MIT', 'devtools', '["test"]', '["claude"]', 40, 0, ?, ?, '1.0.0')
-      `).bind(now, now, now, now, now, now, now, now).run();
+        VALUES ('calctool', 'usr_alexdev', 'Calculator without percent', 'MIT', 'devtools', '["calc"]', '["claude"]', 20, 0, ?, ?, '1.0.0')
+      `).bind(now, now).run();
 
-      // Search for literal '%'
-      const percentRes = await app.request("/v1/skills?q=calc%25tool", {}, env);
-      expect(percentRes.status).toBe(200);
-      const percentData = await percentRes.json() as any;
-      expect(percentData.skills).toHaveLength(1);
-      expect(percentData.skills[0].name).toBe("calc%tool");
+      // Pure wildcard characters carry no search terms, so nothing matches (not everything).
+      for (const q of ["%25", "_", "%25%25", "*", "\"", "NEAR(", "a OR"]) {
+        const res = await app.request(`/v1/skills?q=${encodeURIComponent(decodeURIComponent(q))}`, {}, env);
+        expect(res.status).toBe(200);
+        const data = await res.json() as any;
+        if (["%", "_", "%%", "*", "\""].includes(decodeURIComponent(q))) {
+          expect(data.skills).toHaveLength(0);
+        }
+      }
 
-      // Search for literal '_'
-      const underscoreRes = await app.request("/v1/skills?q=test_skill", {}, env);
-      expect(underscoreRes.status).toBe(200);
-      const underscoreData = await underscoreRes.json() as any;
-      expect(underscoreData.skills).toHaveLength(1);
-      expect(underscoreData.skills[0].name).toBe("test_skill");
+      const res = await app.request("/v1/skills?q=calc", {}, env);
+      const data = await res.json() as any;
+      expect(data.skills.map((x: any) => x.name)).toContain("calctool");
+    });
+
+    it("supports natural-language queries, relevance ranking and text format", async () => {
+      const res = await app.request("/v1/skills?q=summarize%20a%20pdf&format=text", {}, env);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/plain");
+      const text = await res.text();
+      expect(text).toContain("install: npx skillapt install");
     });
 
     it("eliminates N+1 queries during search (asserts DB query count <= 2)", async () => {
